@@ -1,35 +1,51 @@
 <!doctype html>
-<!-- Source of assets/richmenu.png (2500x843). Re-render with: npm run render:richmenu -->
+<!-- Source of assets/richmenu.png (2500x1686, 3 columns x 2 rows). Re-render with: npm run render:richmenu
+     Cell positions must match RICH_MENU_LAYOUT in src/richmenu.ts. -->
 <html lang="th">
 <head>
 <meta charset="utf-8">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@500;600&display=block">
+<link rel="stylesheet" href="../node_modules/@phosphor-icons/web/src/regular/style.css">
 <style>
-  html, body { margin: 0; width: 2500px; height: 843px; overflow: hidden; }
+  html, body { margin: 0; width: 2500px; height: 1686px; overflow: hidden; }
   body {
-    display: grid; grid-template-columns: repeat(4, 1fr); gap: 0;
-    background: #f4f1ea; font-family: "Leelawadee UI", "Tahoma", sans-serif;
+    display: grid;
+    grid-template-columns: 833px 834px 833px;
+    grid-template-rows: 843px 843px;
+    background: #f4f5f6;
+    font-family: "IBM Plex Sans Thai", sans-serif;
+    color: #111417;
   }
-  .btn {
-    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 40px;
-    border-right: 4px solid #e2dccf;
+  .cell { padding: 20px; }
+  .card {
+    height: 100%; box-sizing: border-box;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 44px;
+    border-radius: 56px; background: #ffffff; border: 4px solid #e3e6e9;
   }
-  .btn:last-child { border-right: none; }
-  .icon {
-    width: 260px; height: 260px; border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-family: "Segoe UI Emoji", sans-serif; font-size: 140px;
+  .card i { font-size: 200px; line-height: 1; }
+  .card span { font-size: 92px; font-weight: 600; line-height: 1; }
+
+  .dashboard { grid-column: span 2; }
+  .dashboard .card {
+    flex-direction: row; gap: 72px; justify-content: flex-start; padding-left: 140px;
+    background: #06c755; border-color: #06c755; color: #ffffff;
   }
-  .label { font-size: 92px; font-weight: 700; color: #2f2a22; }
-  .today .icon { background: #d9ecd9; }
-  .month .icon { background: #d6e6f5; }
-  .undo .icon { background: #f7dcd2; }
-  .help .icon { background: #ece3c8; }
+  .dashboard i { font-size: 300px; }
+  .dashboard .text { display: flex; flex-direction: column; gap: 36px; }
+  .dashboard .text span { font-size: 132px; }
+  .dashboard .text small { font-size: 68px; font-weight: 500; opacity: 0.85; }
 </style>
 </head>
 <body>
-  <div class="btn today"><div class="icon">📅</div><div class="label">สรุปวันนี้</div></div>
-  <div class="btn month"><div class="icon">📊</div><div class="label">สรุปเดือนนี้</div></div>
-  <div class="btn undo"><div class="icon">↩️</div><div class="label">ยกเลิกล่าสุด</div></div>
-  <div class="btn help"><div class="icon">📒</div><div class="label">วิธีใช้</div></div>
+  <div class="cell dashboard">
+    <div class="card">
+      <i class="ph ph-chart-pie-slice"></i>
+      <div class="text"><span>แดชบอร์ด</span><small>ดูสรุป · แก้ไขรายการ</small></div>
+    </div>
+  </div>
+  <div class="cell"><div class="card"><i class="ph ph-calendar-check"></i><span>สรุปวันนี้</span></div></div>
+  <div class="cell"><div class="card"><i class="ph ph-chart-bar"></i><span>สรุปเดือนนี้</span></div></div>
+  <div class="cell"><div class="card"><i class="ph ph-arrow-counter-clockwise"></i><span>ยกเลิกล่าสุด</span></div></div>
+  <div class="cell"><div class="card"><i class="ph ph-question"></i><span>วิธีใช้</span></div></div>
 </body>
 </html>

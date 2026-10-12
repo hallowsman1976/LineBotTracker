@@ -3,11 +3,28 @@ import { RICH_MENU_BUTTONS, richMenuBody } from '../src/richmenu';
 import { handleWebhook, type WebhookDeps } from '../src/webhook';
 
 describe('rich menu', () => {
-  it('tiles the full image width with no gaps', () => {
-    const { size, areas, chatBarText } = richMenuBody();
-    expect(areas.reduce((w, a) => w + a.bounds.width, 0)).toBe(size.width);
-    areas.forEach((a, i) => i > 0 && expect(a.bounds.x).toBe(areas[i - 1].bounds.x + areas[i - 1].bounds.width));
+  it('covers the whole image exactly once', () => {
+    const { size, areas, chatBarText } = richMenuBody('2000000000-abcdEFGH');
+    expect(areas.reduce((sum, a) => sum + a.bounds.width * a.bounds.height, 0)).toBe(size.width * size.height);
+    for (const a of areas) {
+      for (const b of areas) {
+        if (a === b) continue;
+        const overlapX = a.bounds.x < b.bounds.x + b.bounds.width && b.bounds.x < a.bounds.x + a.bounds.width;
+        const overlapY = a.bounds.y < b.bounds.y + b.bounds.height && b.bounds.y < a.bounds.y + a.bounds.height;
+        expect(overlapX && overlapY).toBe(false);
+      }
+    }
     expect(chatBarText.length).toBeLessThanOrEqual(14);
+  });
+
+  it('opens the dashboard through LIFF from the wide top-left button', () => {
+    const [dashboard] = richMenuBody('2000000000-abcdEFGH').areas;
+    expect(dashboard.bounds).toEqual({ x: 0, y: 0, width: 1667, height: 843 });
+    expect(dashboard.action).toEqual({ type: 'uri', label: 'แดชบอร์ด', uri: 'https://liff.line.me/2000000000-abcdEFGH' });
+  });
+
+  it('refuses to build without a LIFF ID', () => {
+    expect(() => richMenuBody('')).toThrow('LIFF_ID');
   });
 
   it('every button sends a command the webhook handles without the LLM', () => {

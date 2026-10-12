@@ -62,7 +62,10 @@ export type WebhookResult = 'ok' | 'forbidden' | 'bad_request';
 
 export function handleWebhook(rawBody: string, key: string | undefined, deps: WebhookDeps): WebhookResult {
   if (!deps.webhookToken || !safeEqual(key ?? '', deps.webhookToken)) {
-    deps.log('WARN', 'webhook rejected: bad key');
+    // Lengths only, never the values: enough to tell "no ?key=", "wrong key" and "token not set" apart.
+    const got = key ? `got ${key.length} chars` : 'no ?key= in URL';
+    const expected = deps.webhookToken ? `expected ${deps.webhookToken.length} chars` : 'WEBHOOK_TOKEN not set (run setup)';
+    deps.log('WARN', 'webhook rejected: bad key', `${got}; ${expected}`);
     return 'forbidden';
   }
 

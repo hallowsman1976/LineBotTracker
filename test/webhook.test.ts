@@ -90,6 +90,15 @@ describe('webhook security and plumbing', () => {
     expect(replies).toHaveLength(0);
   });
 
+  it('logs why a key was rejected without logging the key itself', () => {
+    const details: string[] = [];
+    const { deps } = setup({ log: (_l, _m, detail) => details.push(detail ?? '') });
+    handleWebhook('{"events":[]}', undefined, deps);
+    handleWebhook('{"events":[]}', 'wrong', deps);
+    expect(details).toEqual(['no ?key= in URL; expected 12 chars', 'got 5 chars; expected 12 chars']);
+    expect(details.join()).not.toContain(TOKEN);
+  });
+
   it('rejects everything when no token is configured', () => {
     const { deps } = setup({ webhookToken: '' });
     expect(handleWebhook('{"events":[]}', '', deps)).toBe('forbidden');

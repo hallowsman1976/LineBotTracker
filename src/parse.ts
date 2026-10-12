@@ -11,6 +11,11 @@ export interface Entry {
   date: string;
 }
 
+/** A saved entry; `entryId` identifies one sheet row (several can share a message `id`). */
+export interface LedgerEntry extends Entry {
+  entryId: string;
+}
+
 export type ParseResult =
   | { kind: 'transactions'; entries: Entry[]; confident: boolean }
   | { kind: 'not_transaction' };
@@ -88,6 +93,34 @@ export function normalizeLlmResult(raw: unknown, today: string): ParseResult {
 
   if (entries.length === 0) return { kind: 'not_transaction' };
   return { kind: 'transactions', entries, confident };
+}
+
+/**
+ * Validates an entry edited by hand in the dashboard. Unlike LLM output nothing is guessed:
+ * any invalid field is an error for the user to fix. Returns the entry or a Thai error message.
+ */
+export function validateEntryInput(raw: unknown, today: string): Entry | string {
+  const obj = (raw ?? {}) as Record<string, unknown>;
+  const type = obj.type;
+  if (type !== 'income' && type !== 'expense') return 'ประเภทไม่ถูกต้อง';
+
+  const amount = Number(obj.amount);
+  if (!Number.isFinite(amount) || amount <= 0) return 'จำนวนเงินต้องมากกว่า 0';
+  if (amount > MAX_AMOUNT) return 'จำนวนเงินมากเกินไป';
+
+  const category = obj.category;
+  if (typeof category !== 'string' || !CATEGORIES[type].includes(category)) return 'หมวดไม่ถูกต้อง';
+
+  const date = obj.date;
+  if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date))) {
+    return 'วันที่ไม่ถูกต้อง';
+  }
+  if (date > today) return 'วันที่ต้องไม่เกินวันนี้';
+
+  const note = typeof obj.note === 'string' ? obj.note.trim() : '';
+  if (note.length > 100) return 'โน้ตยาวเกิน 100 ตัวอักษร';
+
+  return { type, amount: round2(amount), category, note, date };
 }
 
 export function normalizeVoiceResult(raw: unknown, today: string): VoiceResult {

@@ -29,7 +29,7 @@ export function getProp(name: string): string {
 
 // Rows are read and written by header name, so column order here only matters for a new sheet.
 export const SHEETS = {
-  transactions: ['id', 'date', 'type', 'amount', 'category', 'note', 'userId', 'source', 'rawText', 'timestamp', 'status'],
+  transactions: ['id', 'entryId', 'date', 'type', 'amount', 'category', 'note', 'userId', 'source', 'rawText', 'timestamp', 'status'],
   users: ['userId', 'name', 'active', 'addedAt'],
   logs: ['timestamp', 'level', 'message', 'detail'],
 } as const;

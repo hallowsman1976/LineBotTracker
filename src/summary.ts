@@ -23,6 +23,14 @@ export function rangeFor(period: Period, today: string): Range {
   return { from: `${lastMonthEnd.slice(0, 7)}-01`, to: lastMonthEnd };
 }
 
+/** "2026-10" → 1st to last day of that month; null if the string isn't a valid month. */
+export function monthRange(month: string): Range | null {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return null;
+  const [y, m] = month.split('-').map(Number);
+  const nextMonth = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
+  return { from: `${month}-01`, to: addDays(`${nextMonth}-01`, -1) };
+}
+
 export function inRange(entry: Entry, range: Range): boolean {
   return entry.date >= range.from && entry.date <= range.to;
 }

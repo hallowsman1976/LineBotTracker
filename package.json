@@ -7,7 +7,10 @@
   "scripts": {
     "build": "node build.mjs",
     "render:richmenu": "node scripts/render-richmenu.mjs",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p web",
+    "web:dev": "vite web",
+    "web:build": "vite build web",
+    "web:preview": "vite preview web",
     "test": "vitest run",
     "push": "npm run typecheck && npm test && npm run build && clasp push --force",
     "deploy": "npm run push && clasp update-deployment AKfycbwMdiyG6iUfCJgOpMk0ODfp9zNioWKsCdyBSL3YiQZ5ZwwJtEAwXA1tfp6bZkq8-ISMUA"
@@ -16,6 +19,11 @@
     "@types/google-apps-script": "^2.0.13",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
+    "vite": "^8.3.4",
     "vitest": "^5.0.4"
+  },
+  "dependencies": {
+    "@line/liff": "^2.31.2",
+    "@phosphor-icons/web": "^2.1.2"
   }
 }

@@ -1,10 +1,13 @@
 // Apps Script entry points. build.mjs wraps each export in a top-level function.
 import { DEFAULT_SPREADSHEET_ID, getProp, OPTIONAL_PROP, PROP, SHEETS, STATE_PROP } from './config';
 import { parseVoiceWithGemini, parseWithGemini } from './gemini';
-import { addEntries, cancelEntries, listEntries } from './ledger';
+import { handleApi } from './api';
+import { verifyIdToken } from './auth';
+import { addEntries, backfillEntryIds, cancelEntries, listEntries, removeEntry, updateEntry } from './ledger';
 import richMenuImage from '../assets/richmenu.png';
 import { getMessageContentBase64, lineApi, push, reply } from './line';
 import { runMonthlySummary, type MonthlyDeps } from './monthly';
+import { LIFF_ID } from './publicConfig';
 import { RICH_MENU_NAME, richMenuBody } from './richmenu';
 import { bangkokDate } from './parse';
 import { putPending, takePending } from './pending';
@@ -12,6 +15,18 @@ import { activeUserIds, isAllowedUser, log, markProcessed } from './store';
 import { handleWebhook } from './webhook';
 
 export function doPost(e: GoogleAppsScript.Events.DoPost): GoogleAppsScript.Content.TextOutput {
+  if (e.parameter?.api === '1') {
+    return json(
+      handleApi(e.postData?.contents ?? '', {
+        verifyIdToken,
+        isAllowedUser,
+        now: () => new Date(),
+        ledger: { list: listEntries, update: updateEntry, remove: removeEntry },
+        log,
+      }),
+    );
+  }
+
   // Apps Script cannot read request headers, so x-line-signature is unverifiable;
   // the secret ?key= on the webhook URL authenticates LINE instead.
   const result = handleWebhook(e.postData?.contents ?? '', e.parameter?.key, {
@@ -65,6 +80,9 @@ export function setup(): void {
   const blank = ss.getSheetByName('Sheet1') ?? ss.getSheetByName('ชีต1');
   if (blank && blank.getLastRow() === 0) ss.deleteSheet(blank);
 
+  const filled = backfillEntryIds();
+  if (filled) console.log(`Gave ${filled} existing row(s) an entryId`);
+
   if (!props.getProperty(PROP.WEBHOOK_TOKEN)) {
     props.setProperty(PROP.WEBHOOK_TOKEN, Utilities.getUuid().replace(/-/g, ''));
   }
@@ -88,6 +106,10 @@ export function checkProperties(): void {
 export function showWebhookUrl(): void {
   const url = ScriptApp.getService().getUrl();
   console.log(`${url}?key=${getProp(PROP.WEBHOOK_TOKEN)}`);
+  // getUrl() can return the /dev URL when run from the editor, and LINE can't call that one.
+  if (url.endsWith('/dev')) {
+    console.warn('This is the /dev URL. Use the deployed /exec URL from README.md with the same ?key= instead.');
+  }
 }
 
 /**
@@ -100,7 +122,7 @@ export function setupRichMenu(): void {
     name: string;
   }[];
 
-  const { richMenuId } = JSON.parse(lineApi('post', 'https://api.line.me/v2/bot/richmenu', richMenuBody()));
+  const { richMenuId } = JSON.parse(lineApi('post', 'https://api.line.me/v2/bot/richmenu', richMenuBody(LIFF_ID)));
   const image = Utilities.newBlob(Utilities.base64Decode(richMenuImage), 'image/png', 'richmenu.png');
   lineApi('post', `https://api-data.line.me/v2/bot/richmenu/${richMenuId}/content`, undefined, image);
   lineApi('post', `https://api.line.me/v2/bot/user/all/richmenu/${richMenuId}`);

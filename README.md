@@ -57,6 +57,18 @@ npm run deploy    # push แล้วอัปเดต deployment เดิม 
 - กันส่งซ้ำ: Script Property `LAST_MONTHLY_SUMMARY` = เดือนล่าสุดที่ส่งแล้ว (ระบบเขียนเอง)
 - ใช้โควต้า push message ของ OA 1 ข้อความ/คน/เดือน
 
+## Dashboard (LIFF)
+หน้าเว็บใน `web/` (Vite + TS, ไอคอน Phosphor, Dark Mode) โฮสต์ที่ https://hallowsman1976.github.io/LineBotTracker/
+- ดูตัวอย่างในเครื่อง: `npm run web:dev` → http://localhost:5173 (ถ้า `LIFF_ID` ว่าง หรือมี `?demo=1` จะใช้ข้อมูลสมมติ)
+- API: `POST <web app>/exec?api=1` body `{action: month|update|delete, idToken, ...}` ตรวจ LINE ID token + whitelist และแก้ได้เฉพาะรายการของตัวเอง
+- ค่าที่ไม่ใช่ความลับ (API URL, LIFF ID, LINE Login Channel ID) อยู่ใน `src/publicConfig.ts` ใช้ร่วมกันทั้ง Apps Script และหน้าเว็บ
+
+ตั้งค่าครั้งแรก:
+1. LINE Developers → Provider เดียวกับบอท → สร้าง **LINE Login** channel → แท็บ LIFF → Add: Size `Full`, Endpoint `https://hallowsman1976.github.io/LineBotTracker/`, Scopes `openid` + `profile`
+2. ใส่ `LIFF_ID` และ `LINE_LOGIN_CHANNEL_ID` ใน `src/publicConfig.ts` → `npm run deploy` → push ขึ้น GitHub
+3. GitHub repo → Settings → Pages → Source: **GitHub Actions** (workflow `.github/workflows/pages.yml` build และ deploy ทุกครั้งที่ push)
+4. Run `setup` (เพิ่มคอลัมน์ `entryId` และเติมให้แถวเก่า) แล้ว Run `setupRichMenu` (เมนูใหม่ 2 แถว มีปุ่มแดชบอร์ด)
+
 ชีต `transactions`: `id` เดียวกัน = มาจากข้อความเดียวกัน (ยกเลิกพร้อมกัน), `status` = `active`/`cancelled`, `source` = `text` / `text-rule` (AI ขัดข้อง ใช้กฎสำรอง)
 
 หมายเหตุ: Apps Script อ่าน header ไม่ได้ จึงตรวจ `x-line-signature` ไม่ได้ ใช้ `?key=` ใน URL แทน อย่าแชร์ URL นี้

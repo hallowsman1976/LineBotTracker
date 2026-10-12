@@ -16,8 +16,10 @@ execFileSync(EDGE, [
   '--disable-gpu',
   '--hide-scrollbars',
   '--force-device-scale-factor=1',
+  // Gives the web font and icon font time to load before the screenshot.
+  '--virtual-time-budget=8000',
   `--screenshot=${out}`,
-  '--window-size=2500,843',
+  '--window-size=2500,1686',
   pathToFileURL(resolve('assets/richmenu.html')).href,
 ]);
 
