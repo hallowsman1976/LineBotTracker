@@ -1,4 +1,4 @@
-import { DEFAULT_GEMINI_MODEL, getProp, OPTIONAL_PROP, PROP } from './config';
+import { DEFAULT_GEMINI_FALLBACK_MODEL, DEFAULT_GEMINI_MODEL, getProp, OPTIONAL_PROP, PROP } from './config';
 import {
   addDays,
   CATEGORIES,
@@ -94,22 +94,58 @@ export function parseVoiceWithGemini(audioBase64: string, today: string): VoiceR
 }
 
 function callGemini(systemPrompt: string, parts: unknown[], schema: unknown): unknown {
-  const model = getProp(OPTIONAL_PROP.GEMINI_MODEL) || DEFAULT_GEMINI_MODEL;
-  const res = UrlFetchApp.fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-    method: 'post',
-    contentType: 'application/json',
-    headers: { 'x-goog-api-key': getProp(PROP.GEMINI_API_KEY) },
-    payload: JSON.stringify({
-      systemInstruction: { parts: [{ text: systemPrompt }] },
-      contents: [{ role: 'user', parts }],
-      generationConfig: { responseMimeType: 'application/json', responseSchema: schema },
-    }),
-    muteHttpExceptions: true,
+  const models = [
+    getProp(OPTIONAL_PROP.GEMINI_MODEL) || DEFAULT_GEMINI_MODEL,
+    getProp(OPTIONAL_PROP.GEMINI_FALLBACK_MODEL) || DEFAULT_GEMINI_FALLBACK_MODEL,
+  ];
+  const payload = JSON.stringify({
+    systemInstruction: { parts: [{ text: systemPrompt }] },
+    contents: [{ role: 'user', parts }],
+    generationConfig: { responseMimeType: 'application/json', responseSchema: schema },
   });
-  if (res.getResponseCode() !== 200) {
-    throw new Error(`Gemini ${res.getResponseCode()}: ${res.getContentText().slice(0, 500)}`);
+  const body = fetchWithFallback(
+    models,
+    (model) => {
+      const res = UrlFetchApp.fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: 'post',
+        contentType: 'application/json',
+        headers: { 'x-goog-api-key': getProp(PROP.GEMINI_API_KEY) },
+        payload,
+        muteHttpExceptions: true,
+      });
+      return { status: res.getResponseCode(), body: res.getContentText() };
+    },
+    (ms) => Utilities.sleep(ms),
+  );
+  return JSON.parse(extractText(JSON.parse(body)));
+}
+
+// Overloaded / rate-limited / transient server errors; worth retrying or switching model.
+const RETRYABLE = new Set([429, 500, 502, 503, 504]);
+// Short on purpose: a LINE reply has to go out while the user is waiting.
+const RETRY_DELAYS_MS = [800];
+
+/**
+ * Tries each model in order, retrying transient errors briefly before moving to the next.
+ * Non-retryable errors (bad key, bad request) fail immediately since another model won't help.
+ */
+export function fetchWithFallback(
+  models: string[],
+  request: (model: string) => { status: number; body: string },
+  sleep: (ms: number) => void,
+): string {
+  let lastError = '';
+  for (const model of [...new Set(models.filter(Boolean))]) {
+    for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+      if (attempt > 0) sleep(RETRY_DELAYS_MS[attempt - 1]);
+      const { status, body } = request(model);
+      if (status === 200) return body;
+      lastError = `Gemini ${status} (${model}): ${body.slice(0, 500)}`;
+      if (status === 404) break; // unknown model name: try the next model
+      if (!RETRYABLE.has(status)) throw new Error(lastError);
+    }
   }
-  return JSON.parse(extractText(JSON.parse(res.getContentText())));
+  throw new Error(lastError);
 }
 
 export function extractText(response: unknown): string {

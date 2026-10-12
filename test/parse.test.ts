@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { formatBaht, formatEntry } from '../src/format';
-import { buildSystemPrompt, extractText, RESPONSE_SCHEMA, VOICE_RESPONSE_SCHEMA } from '../src/gemini';
+import {
+  buildSystemPrompt,
+  extractText,
+  fetchWithFallback,
+  RESPONSE_SCHEMA,
+  VOICE_RESPONSE_SCHEMA,
+} from '../src/gemini';
 import { addDays, bangkokDate, normalizeLlmResult, normalizeVoiceResult, parseByRule } from '../src/parse';
 
 const TODAY = '2026-10-12';
@@ -131,6 +137,63 @@ describe('format', () => {
     const e = { type: 'income' as const, amount: 800, category: 'รายได้เสริม', note: 'ค่าแรง', date: TODAY };
     expect(formatEntry(e, TODAY)).toBe('• รายได้เสริม +800 บาท (ค่าแรง)');
     expect(formatEntry({ ...e, date: '2026-10-11' }, TODAY)).toBe('• รายได้เสริม +800 บาท (ค่าแรง) · 11 ต.ค.');
+  });
+});
+
+describe('fetchWithFallback', () => {
+  function run(responses: Record<string, number[]>) {
+    const calls: string[] = [];
+    const sleeps: number[] = [];
+    const left = Object.fromEntries(Object.entries(responses).map(([m, s]) => [m, [...s]]));
+    const call = () =>
+      fetchWithFallback(
+        Object.keys(responses),
+        (model) => {
+          calls.push(model);
+          const status = left[model].shift() ?? 503;
+          return { status, body: status === 200 ? `ok:${model}` : `{"error":${status}}` };
+        },
+        (ms) => sleeps.push(ms),
+      );
+    return { call, calls, sleeps };
+  }
+
+  it('returns the first success without retrying', () => {
+    const { call, calls, sleeps } = run({ main: [200], lite: [200] });
+    expect(call()).toBe('ok:main');
+    expect(calls).toEqual(['main']);
+    expect(sleeps).toEqual([]);
+  });
+
+  it('retries a 503 once on the same model', () => {
+    const { call, calls, sleeps } = run({ main: [503, 200], lite: [200] });
+    expect(call()).toBe('ok:main');
+    expect(calls).toEqual(['main', 'main']);
+    expect(sleeps).toEqual([800]);
+  });
+
+  it('switches to the fallback model when the main one stays overloaded', () => {
+    const { call, calls } = run({ main: [503, 503], lite: [200] });
+    expect(call()).toBe('ok:lite');
+    expect(calls).toEqual(['main', 'main', 'lite']);
+  });
+
+  it('moves on immediately from an unknown model (404)', () => {
+    const { call, calls } = run({ main: [404], lite: [200] });
+    expect(call()).toBe('ok:lite');
+    expect(calls).toEqual(['main', 'lite']);
+  });
+
+  it('fails fast on a non-retryable error such as a bad key', () => {
+    const { call, calls } = run({ main: [403], lite: [200] });
+    expect(call).toThrow('Gemini 403 (main)');
+    expect(calls).toEqual(['main']);
+  });
+
+  it('reports the last error when every model fails', () => {
+    const { call, calls } = run({ main: [503, 503], lite: [503, 503] });
+    expect(call).toThrow('Gemini 503 (lite)');
+    expect(calls).toHaveLength(4);
   });
 });
 

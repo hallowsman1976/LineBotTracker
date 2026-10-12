@@ -152,7 +152,11 @@ export function sendMonthlySummaryNow(): void {
 export function testGemini(): void {
   const today = bangkokDate(new Date());
   for (const sample of ['ข้าวมันไก่ 60 กับกาแฟ 45', 'เมื่อวานได้ค่าแรงแปดร้อย', 'สวัสดีครับ']) {
-    console.log(sample, '→', JSON.stringify(parseWithGemini(sample, today)));
+    try {
+      console.log(sample, '→', JSON.stringify(parseWithGemini(sample, today)));
+    } catch (err) {
+      console.error(sample, '→ FAILED', String((err as Error)?.message ?? err));
+    }
   }
 }
 

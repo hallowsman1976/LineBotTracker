@@ -13,12 +13,15 @@ export const STATE_PROP = {
 /** Optional overrides; a default is used when unset. */
 export const OPTIONAL_PROP = {
   GEMINI_MODEL: 'GEMINI_MODEL',
+  GEMINI_FALLBACK_MODEL: 'GEMINI_FALLBACK_MODEL',
 } as const;
 
 /** setup() stores this as SPREADSHEET_ID when the property is unset. Not a secret: access follows Drive sharing. */
 export const DEFAULT_SPREADSHEET_ID = '1E0_sRw-w9SJ2O-QUgaY79OHngzY0a-Iz8v8vS_doc68';
 
 export const DEFAULT_GEMINI_MODEL = 'gemini-3.8-flash';
+/** Used when the main model is overloaded (503) or rate-limited; a different model has separate capacity. */
+export const DEFAULT_GEMINI_FALLBACK_MODEL = 'gemini-3.5-flash-lite';
 
 export function getProp(name: string): string {
   return PropertiesService.getScriptProperties().getProperty(name) ?? '';
