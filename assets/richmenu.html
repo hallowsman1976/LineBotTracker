@@ -1,0 +1,35 @@
+<!doctype html>
+<!-- Source of assets/richmenu.png (2500x843). Re-render with: npm run render:richmenu -->
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; width: 2500px; height: 843px; overflow: hidden; }
+  body {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 0;
+    background: #f4f1ea; font-family: "Leelawadee UI", "Tahoma", sans-serif;
+  }
+  .btn {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 40px;
+    border-right: 4px solid #e2dccf;
+  }
+  .btn:last-child { border-right: none; }
+  .icon {
+    width: 260px; height: 260px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-family: "Segoe UI Emoji", sans-serif; font-size: 140px;
+  }
+  .label { font-size: 92px; font-weight: 700; color: #2f2a22; }
+  .today .icon { background: #d9ecd9; }
+  .month .icon { background: #d6e6f5; }
+  .undo .icon { background: #f7dcd2; }
+  .help .icon { background: #ece3c8; }
+</style>
+</head>
+<body>
+  <div class="btn today"><div class="icon">📅</div><div class="label">สรุปวันนี้</div></div>
+  <div class="btn month"><div class="icon">📊</div><div class="label">สรุปเดือนนี้</div></div>
+  <div class="btn undo"><div class="icon">↩️</div><div class="label">ยกเลิกล่าสุด</div></div>
+  <div class="btn help"><div class="icon">📒</div><div class="label">วิธีใช้</div></div>
+</body>
+</html>

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+
+# Installed agent skills; reinstall from skills-lock.json
+.agents/
+.claude/skills/
+.claude/settings.local.json
