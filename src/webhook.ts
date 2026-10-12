@@ -1,22 +1,22 @@
 // Pure webhook handling: no Apps Script globals here, so it runs under vitest.
 // Everything with side effects comes in through `WebhookDeps`.
+import { confirmCard } from './flex';
 import { formatEntries, HELP_TEXT, NOT_UNDERSTOOD_TEXT, SYSTEM_ERROR_TEXT } from './format';
+import type { LineMessage, QuickReplyItem } from './lineTypes';
 import {
   bangkokDate,
+  flipEntryType,
   parseByRule,
   type Entry,
+  type ImageResult,
   type ParseResult,
+  type SlipParties,
   type VoiceIntent,
   type VoiceResult,
 } from './parse';
 import { formatSummary, rangeFor, type Period } from './summary';
 
-type QuickReplyItem = {
-  type: 'action';
-  action: { type: 'postback'; label: string; data: string; displayText: string };
-};
-
-export type LineMessage = { type: 'text'; text: string; quickReply?: { items: QuickReplyItem[] } };
+export type { LineMessage } from './lineTypes';
 
 export interface LineEvent {
   type: string;
@@ -31,7 +31,14 @@ export interface Pending {
   id: string;
   entries: Entry[];
   rawText: string;
+  /** text, voice, slip, receipt */
   source: string;
+  /** Shown on the card, e.g. the voice transcript. */
+  heading?: string;
+  /** Slip reference number, checked for duplicates again at confirm time. */
+  ref?: string;
+  /** Slip parties, so flipping income/expense also flips whose name is the note. */
+  parties?: SlipParties;
 }
 
 export interface WebhookDeps {
@@ -47,13 +54,19 @@ export interface WebhookDeps {
   parse(text: string, today: string): ParseResult;
   /** Downloads and interprets a voice message; throws when that fails. */
   parseVoice(messageId: string, today: string): VoiceResult;
+  /** Downloads and reads a slip/receipt photo for this user; throws when that fails. */
+  parseImage(messageId: string, userId: string, today: string): ImageResult;
   ledger: {
-    add(id: string, entries: Entry[], meta: { userId: string; rawText: string; source: string }): void;
+    add(id: string, entries: Entry[], meta: { userId: string; rawText: string; source: string; ref?: string }): void;
     cancel(userId: string, id?: string): Entry[];
     list(userId: string, from: string, to: string): Entry[];
+    /** True when an active entry of this user already carries this slip reference. */
+    hasRef(userId: string, ref: string): boolean;
   };
+  /** Several items can wait at once (e.g. a batch of slips), each under its own id. */
   pending: {
     put(userId: string, pending: Pending): void;
+    get(userId: string, id: string): Pending | null;
     take(userId: string, id: string): Pending | null;
   };
 }
@@ -111,7 +124,39 @@ function handleEvent(event: LineEvent, deps: WebhookDeps): void {
   const message = event.message;
   if (message?.type === 'text') return handleText(ctx, message.text ?? '');
   if (message?.type === 'audio') return handleVoice(ctx, message.id, message.duration ?? 0);
-  say(ctx, 'ตอนนี้รองรับเฉพาะข้อความและเสียงนะ');
+  if (message?.type === 'image') return handleImage(ctx, message.id);
+  say(ctx, 'ตอนนี้รองรับข้อความ เสียง และรูปสลิป/ใบเสร็จนะ');
+}
+
+function handleImage(ctx: Ctx, messageId: string): void {
+  const today = bangkokDate(ctx.deps.now());
+  let image: ImageResult;
+  try {
+    image = ctx.deps.parseImage(messageId, ctx.userId, today);
+  } catch (err) {
+    ctx.deps.log('ERROR', 'image parse failed', String((err as Error)?.message ?? err));
+    return say(ctx, '📷 อ่านรูปไม่สำเร็จ ยังไม่ได้บันทึกนะ ลองส่งใหม่หรือพิมพ์แทนได้เลย');
+  }
+
+  if (image.kind === 'other') return say(ctx, '📷 รูปนี้ไม่ใช่สลิปหรือใบเสร็จ ไม่ได้บันทึกนะ');
+  if (image.kind === 'unreadable') {
+    return say(ctx, '📷 อ่านยอดเงินในรูปไม่ได้ ลองส่งรูปที่ชัดขึ้น หรือพิมพ์แทน เช่น "ค่าไฟ 640"');
+  }
+  if (image.ref && ctx.deps.ledger.hasRef(ctx.userId, image.ref)) return say(ctx, alreadySavedText(image.ref));
+
+  // Reading a photo can go wrong (blur, crop, glare), so image entries are always confirmed.
+  askToConfirm(ctx, {
+    id: ctx.deps.newId(),
+    entries: [image.entry],
+    rawText: [image.parties.sender, image.parties.receiver].filter(Boolean).join(' → '),
+    source: image.source,
+    ref: image.ref || undefined,
+    parties: image.parties,
+  });
+}
+
+function alreadySavedText(ref: string): string {
+  return `📷 สลิปนี้บันทึกไปแล้ว (Ref ${ref})`;
 }
 
 // Keeps Gemini cost and Apps Script run time bounded; a ledger entry never needs a long clip.
@@ -150,11 +195,13 @@ function handleVoice(ctx: Ctx, messageId: string, durationMs: number): void {
   if (voice.result.kind === 'not_transaction') return say(ctx, `${heard}\n${NOT_UNDERSTOOD_TEXT}`);
 
   // Speech can be misheard, so voice entries are always confirmed before saving.
-  askToConfirm(
-    ctx,
-    { id: ctx.deps.newId(), entries: voice.result.entries, rawText: voice.transcript, source: 'voice' },
-    heard,
-  );
+  askToConfirm(ctx, {
+    id: ctx.deps.newId(),
+    entries: voice.result.entries,
+    rawText: voice.transcript,
+    source: 'voice',
+    heading: voice.transcript,
+  });
 }
 
 function summarize(ctx: Ctx, period: Period, today: string): void {
@@ -205,20 +252,31 @@ function handlePostback(ctx: Ctx, data: string): void {
   switch (params.a) {
     case 'confirm': {
       const pending = ctx.deps.pending.take(ctx.userId, params.id ?? '');
-      if (!pending) return say(ctx, 'รายการนี้หมดเวลายืนยันแล้ว ส่งใหม่อีกครั้งนะ');
-      return save(ctx, pending.entries, pending.rawText, pending.source);
+      if (!pending) return say(ctx, EXPIRED_TEXT);
+      // The same slip may have been confirmed from another card in the meantime.
+      if (pending.ref && ctx.deps.ledger.hasRef(ctx.userId, pending.ref)) return say(ctx, alreadySavedText(pending.ref));
+      return save(ctx, pending.entries, pending.rawText, pending.source, '', pending.ref);
+    }
+    case 'toggle': {
+      const pending = ctx.deps.pending.get(ctx.userId, params.id ?? '');
+      if (!pending || pending.entries.length !== 1) return say(ctx, EXPIRED_TEXT);
+      const flipped = { ...pending, entries: [flipEntryType(pending.entries[0], pending.parties)] };
+      ctx.deps.pending.put(ctx.userId, flipped);
+      return ctx.deps.reply(ctx.replyToken, [confirmCard(flipped, bangkokDate(ctx.deps.now()))]);
     }
     case 'reject':
       ctx.deps.pending.take(ctx.userId, params.id ?? '');
-      return say(ctx, 'โอเค ไม่บันทึกนะ ลองพิมพ์ใหม่ได้เลย');
+      return say(ctx, 'โอเค ไม่บันทึกนะ');
     case 'cancel':
       return cancel(ctx, params.id);
   }
 }
 
-function save(ctx: Ctx, entries: Entry[], rawText: string, source: string, suffix = ''): void {
+const EXPIRED_TEXT = 'รายการนี้หมดเวลายืนยันแล้ว ส่งใหม่อีกครั้งนะ';
+
+function save(ctx: Ctx, entries: Entry[], rawText: string, source: string, suffix = '', ref?: string): void {
   const id = ctx.deps.newId();
-  ctx.deps.ledger.add(id, entries, { userId: ctx.userId, rawText, source });
+  ctx.deps.ledger.add(id, entries, { userId: ctx.userId, rawText, source, ...(ref ? { ref } : {}) });
   const today = bangkokDate(ctx.deps.now());
   ctx.deps.reply(ctx.replyToken, [
     text(`✅ บันทึกแล้ว\n${formatEntries(entries, today)}${suffix}`, [
@@ -227,16 +285,9 @@ function save(ctx: Ctx, entries: Entry[], rawText: string, source: string, suffi
   ]);
 }
 
-function askToConfirm(ctx: Ctx, pending: Pending, heading = ''): void {
+function askToConfirm(ctx: Ctx, pending: Pending): void {
   ctx.deps.pending.put(ctx.userId, pending);
-  const today = bangkokDate(ctx.deps.now());
-  const prefix = heading ? `${heading}\n` : '';
-  ctx.deps.reply(ctx.replyToken, [
-    text(`${prefix}ช่วยตรวจหน่อย ถูกไหม? 🧐\n${formatEntries(pending.entries, today)}`, [
-      postback('✅ ถูกต้อง บันทึก', `a=confirm&id=${pending.id}`, 'ถูกต้อง'),
-      postback('❌ ไม่ใช่', `a=reject&id=${pending.id}`, 'ไม่ใช่'),
-    ]),
-  ]);
+  ctx.deps.reply(ctx.replyToken, [confirmCard(pending, bangkokDate(ctx.deps.now()))]);
 }
 
 function cancel(ctx: Ctx, id?: string): void {

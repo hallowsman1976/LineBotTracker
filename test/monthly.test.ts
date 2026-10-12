@@ -49,9 +49,9 @@ describe('runMonthlySummary', () => {
     const { deps, pushes, lastSent } = setup(at('2026-10-31'));
     expect(runMonthlySummary(deps)).toBe(2);
     expect(pushes.map((p) => p.to)).toEqual(['Ua', 'Ub']);
-    expect(pushes[0].messages[0].text).toContain('🗓️ สรุปสิ้นเดือน\n📊 สรุปเดือนตุลาคม 2569');
-    expect(pushes[0].messages[0].text).toContain('รายจ่าย −120 บาท');
-    expect(pushes[1].messages[0].text).toContain('ยังไม่มีรายการ');
+    expect((pushes[0].messages[0] as { text: string }).text).toContain('🗓️ สรุปสิ้นเดือน\n📊 สรุปเดือนตุลาคม 2569');
+    expect((pushes[0].messages[0] as { text: string }).text).toContain('รายจ่าย −120 บาท');
+    expect((pushes[1].messages[0] as { text: string }).text).toContain('ยังไม่มีรายการ');
     expect(lastSent()).toBe('2026-10');
   });
 

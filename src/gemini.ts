@@ -2,8 +2,10 @@ import { DEFAULT_GEMINI_FALLBACK_MODEL, DEFAULT_GEMINI_MODEL, getProp, OPTIONAL_
 import {
   addDays,
   CATEGORIES,
+  normalizeImageResult,
   normalizeLlmResult,
   normalizeVoiceResult,
+  type ImageResult,
   type ParseResult,
   type VoiceResult,
   VOICE_INTENTS,
@@ -75,6 +77,50 @@ export function buildVoicePrompt(today: string): string {
     '- ถ้า intent ไม่ใช่ record ให้ isTransaction=false และ items=[]',
     '- เสียงไม่ชัดหรือได้ยินตัวเลขไม่แน่ใจ ให้ confidence=low',
   ].join('\n');
+}
+
+export const IMAGE_RESPONSE_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    kind: { type: 'STRING', enum: ['slip', 'receipt', 'other'] },
+    amount: { type: 'NUMBER' },
+    date: { type: 'STRING' },
+    sender: { type: 'STRING' },
+    receiver: { type: 'STRING' },
+    ref: { type: 'STRING' },
+    userIsReceiver: { type: 'BOOLEAN' },
+    category: { type: 'STRING', enum: ALL_CATEGORIES },
+  },
+  required: ['kind', 'amount', 'date', 'sender', 'receiver', 'ref', 'userIsReceiver', 'category'],
+};
+
+export function buildImagePrompt(today: string, accountNames: string[]): string {
+  const names = accountNames.length ? accountNames.map((n) => `"${n}"`).join(', ') : '(ไม่ได้ระบุ)';
+  return [
+    'คุณอ่านรูปสลิปโอนเงินหรือใบเสร็จภาษาไทยแล้วตอบเป็น JSON ตาม schema',
+    `วันนี้คือ ${today} เขตเวลาประเทศไทย`,
+    'kind: slip = สลิปโอนเงิน/พร้อมเพย์/จ่ายบิลจากแอปธนาคารหรือ e-wallet, receipt = ใบเสร็จ/บิลร้านค้า, other = รูปอื่น',
+    'กติกา:',
+    '- amount = ยอดเงินที่โอนหรือยอดรวมสุทธิที่จ่าย (บาท) ถ้าอ่านไม่ออกให้เป็น 0',
+    '- date = วันที่ทำรายการ YYYY-MM-DD แปลงปี พ.ศ. เป็น ค.ศ. (ลบ 543) และเดือนย่อภาษาไทยให้ถูก',
+    '- sender = ชื่อผู้โอน, receiver = ชื่อผู้รับหรือชื่อร้าน (ใบเสร็จให้ sender เป็นค่าว่าง)',
+    '- ref = เลขที่อ้างอิงรายการ (Ref No. / รหัสอ้างอิง / เลขที่รายการ) ถ้าไม่มีให้เป็นค่าว่าง',
+    '- ห้ามใส่เลขบัญชีในช่องใดๆ',
+    `- ชื่อบัญชีของผู้ใช้: ${names} — userIsReceiver = true เฉพาะเมื่อผู้รับในสลิปเป็นผู้ใช้`,
+    '  (ธนาคารอาจตัดนามสกุล ย่อ หรือแสดงเป็นภาษาอังกฤษ ให้เทียบแบบยืดหยุ่น) ใบเสร็จให้เป็น false',
+    `- category รายจ่ายเลือกจาก: ${CATEGORIES.expense.join(', ')} (เดาจากชื่อร้าน/ผู้รับ/บันทึกช่วยจำ)`,
+    `- ถ้าผู้ใช้เป็นผู้รับ category เลือกจาก: ${CATEGORIES.income.join(', ')}`,
+  ].join('\n');
+}
+
+/** Reads a slip or receipt photo (JPEG from LINE). Throws on API failure. */
+export function parseImageWithGemini(imageBase64: string, today: string, accountNames: string[]): ImageResult {
+  const raw = callGemini(
+    buildImagePrompt(today, accountNames),
+    [{ inlineData: { mimeType: 'image/jpeg', data: imageBase64 } }],
+    IMAGE_RESPONSE_SCHEMA,
+  );
+  return normalizeImageResult(raw, today);
 }
 
 /** Parses one text message with Gemini. Throws on any API or format failure so the caller can fall back. */

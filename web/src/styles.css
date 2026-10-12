@@ -388,6 +388,13 @@ button {
   font-weight: 500;
 }
 
+.source-badge {
+  margin-left: 6px;
+  color: var(--text-3);
+  font-size: 14px;
+  vertical-align: -1px;
+}
+
 .row .sub {
   color: var(--text-3);
   font-size: 13px;

@@ -1,17 +1,25 @@
 // Apps Script entry points. build.mjs wraps each export in a top-level function.
 import { DEFAULT_SPREADSHEET_ID, getProp, OPTIONAL_PROP, PROP, SHEETS, STATE_PROP } from './config';
-import { parseVoiceWithGemini, parseWithGemini } from './gemini';
+import { parseImageWithGemini, parseVoiceWithGemini, parseWithGemini } from './gemini';
 import { handleApi } from './api';
 import { verifyIdToken } from './auth';
-import { addEntries, backfillEntryIds, cancelEntries, listEntries, removeEntry, updateEntry } from './ledger';
+import {
+  addEntries,
+  backfillEntryIds,
+  cancelEntries,
+  hasActiveRef,
+  listEntries,
+  removeEntry,
+  updateEntry,
+} from './ledger';
 import richMenuImage from '../assets/richmenu.png';
 import { getMessageContentBase64, lineApi, push, reply } from './line';
 import { runMonthlySummary, type MonthlyDeps } from './monthly';
 import { LIFF_ID } from './publicConfig';
 import { RICH_MENU_NAME, richMenuBody } from './richmenu';
 import { bangkokDate } from './parse';
-import { putPending, takePending } from './pending';
-import { activeUserIds, isAllowedUser, log, markProcessed } from './store';
+import { getPending, putPending, takePending } from './pending';
+import { accountNamesFor, activeUserIds, isAllowedUser, log, markProcessed } from './store';
 import { handleWebhook } from './webhook';
 
 export function doPost(e: GoogleAppsScript.Events.DoPost): GoogleAppsScript.Content.TextOutput {
@@ -39,8 +47,10 @@ export function doPost(e: GoogleAppsScript.Events.DoPost): GoogleAppsScript.Cont
     newId: () => Utilities.getUuid().replace(/-/g, '').slice(0, 12),
     parse: parseWithGemini,
     parseVoice: (messageId, today) => parseVoiceWithGemini(getMessageContentBase64(messageId), today),
-    ledger: { add: addEntries, cancel: cancelEntries, list: listEntries },
-    pending: { put: putPending, take: takePending },
+    parseImage: (messageId, userId, today) =>
+      parseImageWithGemini(getMessageContentBase64(messageId), today, accountNamesFor(userId)),
+    ledger: { add: addEntries, cancel: cancelEntries, list: listEntries, hasRef: hasActiveRef },
+    pending: { put: putPending, get: getPending, take: takePending },
   });
   return json({ result });
 }

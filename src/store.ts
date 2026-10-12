@@ -15,6 +15,25 @@ export function activeUserIds(): string[] {
     .map(([id]) => String(id).trim());
 }
 
+/** The user's bank account names from the `accountNames` column (comma-separated), for slip matching. */
+export function accountNamesFor(userId: string): string[] {
+  const sheet = openDb().getSheetByName('users');
+  if (!sheet || sheet.getLastRow() < 2) return [];
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+  const nameCol = headers.indexOf('accountNames');
+  if (nameCol < 0) return [];
+  const row = sheet
+    .getRange(2, 1, sheet.getLastRow() - 1, headers.length)
+    .getValues()
+    .find(([id]) => String(id).trim() === userId);
+  return row
+    ? String(row[nameCol])
+        .split(',')
+        .map((n) => n.trim())
+        .filter(Boolean)
+    : [];
+}
+
 export function isAllowedUser(userId: string): boolean {
   return activeUserIds().includes(userId);
 }

@@ -204,10 +204,14 @@ function renderList(): string {
 function renderRow(e: LedgerEntry): string {
   const title = e.note || e.category;
   const sub = e.note ? e.category : e.type === 'income' ? 'รายรับ' : 'รายจ่าย';
+  const fromImage = e.source === 'slip' || e.source === 'receipt';
+  const badge = fromImage
+    ? `<i class="ph ph-receipt source-badge" aria-label="${e.source === 'slip' ? 'จากสลิป' : 'จากใบเสร็จ'}"></i>`
+    : '';
   return `
     <button class="row" data-action="edit" data-id="${esc(e.entryId)}">
       <span class="cat-icon"><i class="ph ${categoryIcon(e.category)}"></i></span>
-      <span style="min-width:0"><div class="title">${esc(title)}</div><div class="sub">${esc(sub)}</div></span>
+      <span style="min-width:0"><div class="title">${esc(title)}${badge}</div><div class="sub">${esc(sub)}</div></span>
       <span class="amount num ${e.type === 'income' ? 'income' : ''}">${amountFor(e)}</span>
     </button>`;
 }
@@ -315,6 +319,7 @@ async function saveDraft(): Promise<void> {
   const original = editing;
   const draft: LedgerEntry = {
     entryId: original.entryId,
+    source: original.source,
     type: draftType,
     amount: Number(($<HTMLInputElement>('#f-amount').value || '').replace(/,/g, '')),
     category: draftCategory,

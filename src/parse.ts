@@ -14,7 +14,22 @@ export interface Entry {
 /** A saved entry; `entryId` identifies one sheet row (several can share a message `id`). */
 export interface LedgerEntry extends Entry {
   entryId: string;
+  /** How it was recorded: text, text-rule, voice, slip, receipt */
+  source?: string;
 }
+
+export type ImageSource = 'slip' | 'receipt';
+
+/** Both parties on a slip, so the note can follow when the user flips income/expense. */
+export interface SlipParties {
+  sender: string;
+  receiver: string;
+}
+
+export type ImageResult =
+  | { kind: 'transaction'; source: ImageSource; entry: Entry; ref: string; parties: SlipParties }
+  | { kind: 'other' }
+  | { kind: 'unreadable' };
 
 export type ParseResult =
   | { kind: 'transactions'; entries: Entry[]; confident: boolean }
@@ -121,6 +136,61 @@ export function validateEntryInput(raw: unknown, today: string): Entry | string 
   if (note.length > 100) return 'โน้ตยาวเกิน 100 ตัวอักษร';
 
   return { type, amount: round2(amount), category, note, date };
+}
+
+/**
+ * Validates what Gemini read from a slip or receipt image. A slip is income only when Gemini
+ * matched the user as the receiver; everything else is an expense the user can flip later.
+ */
+export function normalizeImageResult(raw: unknown, today: string): ImageResult {
+  const obj = (raw ?? {}) as Record<string, unknown>;
+  if (obj.kind !== 'slip' && obj.kind !== 'receipt') return { kind: 'other' };
+
+  const amount = Number(obj.amount);
+  if (!Number.isFinite(amount) || amount <= 0 || amount > MAX_AMOUNT) return { kind: 'unreadable' };
+
+  const text = (v: unknown, max = 100) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+  const parties = { sender: text(obj.sender), receiver: text(obj.receiver) };
+  const type: TxType = obj.kind === 'slip' && obj.userIsReceiver === true ? 'income' : 'expense';
+
+  const rawDate = text(obj.date, 10);
+  const earliest = addDays(today, -MAX_PAST_DAYS);
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) && rawDate <= today && rawDate >= earliest ? rawDate : today;
+
+  return {
+    kind: 'transaction',
+    source: obj.kind,
+    entry: {
+      type,
+      amount: round2(amount),
+      category: categoryFor(type, obj.category),
+      note: noteFor(type, parties),
+      date,
+    },
+    // Reference numbers are letters and digits; anything else is OCR noise.
+    ref: text(obj.ref, 60).replace(/[^0-9A-Za-z]/g, ''),
+    parties,
+  };
+}
+
+/** Flips an entry between income and expense, keeping category and note sensible for the new type. */
+export function flipEntryType(entry: Entry, parties?: SlipParties): Entry {
+  const type: TxType = entry.type === 'income' ? 'expense' : 'income';
+  return {
+    ...entry,
+    type,
+    category: categoryFor(type, entry.category),
+    note: parties ? noteFor(type, parties) : entry.note,
+  };
+}
+
+function categoryFor(type: TxType, category: unknown): string {
+  return typeof category === 'string' && CATEGORIES[type].includes(category) ? category : OTHER;
+}
+
+/** The other party: who paid you for income, who you paid (or the shop) for an expense. */
+function noteFor(type: TxType, parties: SlipParties): string {
+  return (type === 'income' ? parties.sender : parties.receiver) || parties.receiver || parties.sender;
 }
 
 export function normalizeVoiceResult(raw: unknown, today: string): VoiceResult {

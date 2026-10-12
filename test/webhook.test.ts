@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Entry, ParseResult, VoiceResult } from '../src/parse';
+import type { Entry, ImageResult, ParseResult, VoiceResult } from '../src/parse';
 import { handleWebhook, type LineEvent, type LineMessage, type Pending, type WebhookDeps } from '../src/webhook';
 
 const TOKEN = 'secret-token';
@@ -9,11 +9,23 @@ const TODAY = '2026-10-12';
 
 const food: Entry = { type: 'expense', amount: 60, category: 'อาหาร', note: 'ข้าวมันไก่', date: TODAY };
 
+const slip: ImageResult = {
+  kind: 'transaction',
+  source: 'slip',
+  entry: { type: 'expense', amount: 640, category: 'บิล/สาธารณูปโภค', note: 'การไฟฟ้า', date: '2026-10-09' },
+  ref: '2026100912345',
+  parties: { sender: 'นาย ก', receiver: 'การไฟฟ้า' },
+};
+
 function setup(
-  overrides: Partial<WebhookDeps> & { parseResult?: ParseResult | Error; voiceResult?: VoiceResult | Error } = {},
+  overrides: Partial<WebhookDeps> & {
+    parseResult?: ParseResult | Error;
+    voiceResult?: VoiceResult | Error;
+    imageResult?: ImageResult | Error;
+  } = {},
 ) {
   const replies: { token: string; messages: LineMessage[] }[] = [];
-  const saved: { id: string; entries: Entry[]; source: string; userId: string }[] = [];
+  const saved: { id: string; entries: Entry[]; source: string; userId: string; ref?: string }[] = [];
   const cancelled: string[] = [];
   const logs: string[] = [];
   const seen = new Set<string>();
@@ -22,6 +34,7 @@ function setup(
   const {
     parseResult = { kind: 'transactions', entries: [food], confident: true },
     voiceResult = { transcript: 'ข้าวมันไก่หกสิบ', intent: 'record', result: { kind: 'transactions', entries: [food], confident: true } },
+    imageResult = slip,
     ...rest
   } = overrides;
 
@@ -41,8 +54,14 @@ function setup(
       if (voiceResult instanceof Error) throw voiceResult;
       return voiceResult;
     },
+    parseImage: () => {
+      if (imageResult instanceof Error) throw imageResult;
+      return imageResult;
+    },
     ledger: {
-      add: (id, entries, meta) => saved.push({ id, entries, source: meta.source, userId: meta.userId }),
+      add: (id, entries, meta) =>
+        saved.push({ id, entries, source: meta.source, userId: meta.userId, ...(meta.ref ? { ref: meta.ref } : {}) }),
+      hasRef: (userId, ref) => saved.some((s) => s.userId === userId && s.ref === ref && !cancelled.includes(s.id)),
       cancel: (userId, id) => {
         const hit = [...saved].reverse().find((s) => s.userId === userId && (!id || s.id === id) && !cancelled.includes(s.id));
         if (!hit) return [];
@@ -56,20 +75,40 @@ function setup(
           .filter((e) => e.date >= from && e.date <= to),
     },
     pending: {
-      put: (userId, p) => pendings.set(userId, p),
+      put: (userId, p) => pendings.set(`${userId}:${p.id}`, p),
+      get: (userId, id) => pendings.get(`${userId}:${id}`) ?? null,
       take: (userId, id) => {
-        const p = pendings.get(userId);
-        if (!p || p.id !== id) return null;
-        pendings.delete(userId);
+        const p = pendings.get(`${userId}:${id}`) ?? null;
+        pendings.delete(`${userId}:${id}`);
         return p;
       },
     },
     ...rest,
   };
   const last = () => replies[replies.length - 1]?.messages[0];
-  const lastText = () => last()?.text ?? '';
-  const lastQuickReplyData = () => last()?.quickReply?.items.map((item) => item.action.data) ?? [];
-  return { deps, replies, saved, cancelled, logs, lastText, lastQuickReplyData };
+  /** Text of a text message, or every text node of a Flex card joined by newlines. */
+  const lastText = () => {
+    const m = last();
+    if (!m) return '';
+    return m.type === 'text' ? m.text : collect(m.contents, 'text').join('\n');
+  };
+  /** Postback data of quick replies or Flex buttons, in order. */
+  const lastQuickReplyData = () => {
+    const m = last();
+    if (!m) return [];
+    return m.type === 'text'
+      ? (m.quickReply?.items.map((item) => item.action.data) ?? [])
+      : collect(m.contents, 'data');
+  };
+  const button = (action: 'confirm' | 'toggle' | 'reject') =>
+    lastQuickReplyData().find((d) => d.startsWith(`a=${action}&`)) ?? '';
+  return { deps, replies, saved, cancelled, logs, last, lastText, lastQuickReplyData, button };
+}
+
+function collect(node: unknown, key: string): string[] {
+  if (Array.isArray(node)) return node.flatMap((n) => collect(n, key));
+  if (!node || typeof node !== 'object') return [];
+  return Object.entries(node).flatMap(([k, v]) => (k === key && typeof v === 'string' ? [v] : collect(v, key)));
 }
 
 let eventSeq = 0;
@@ -140,7 +179,7 @@ describe('webhook security and plumbing', () => {
 
   it('replies with a system error and keeps going when one event fails', () => {
     const { deps, logs, lastText } = setup({
-      ledger: { add: () => { throw new Error('lock timeout'); }, cancel: () => [], list: () => [] },
+      ledger: { add: () => { throw new Error('lock timeout'); }, cancel: () => [], list: () => [], hasRef: () => false },
     });
     expect(send(deps, textMsg('ข้าว 60'))).toBe('ok');
     expect(logs).toContain('event failed');
@@ -159,36 +198,37 @@ describe('recording entries', () => {
   });
 
   it('asks before saving a low-confidence result, then saves on confirm', () => {
-    const { deps, saved, lastText, lastQuickReplyData } = setup({
+    const { deps, saved, last, lastText, button } = setup({
       parseResult: { kind: 'transactions', entries: [food], confident: false },
     });
     send(deps, textMsg('ข้าว หกสิบ มั้ง'));
     expect(saved).toHaveLength(0);
-    expect(lastText()).toContain('ถูกไหม');
-    const [confirm] = lastQuickReplyData();
+    expect(last()?.type).toBe('flex');
+    expect(lastText()).toContain('ถูกต้องไหม');
+    expect(lastText()).toContain('−60 บาท');
 
-    send(deps, postbackMsg(confirm));
+    send(deps, postbackMsg(button('confirm')));
     expect(saved).toHaveLength(1);
     expect(saved[0].entries).toEqual([food]);
     expect(lastText()).toContain('บันทึกแล้ว');
   });
 
   it('saves nothing when the user rejects', () => {
-    const { deps, saved, lastText, lastQuickReplyData } = setup({
+    const { deps, saved, lastText, button } = setup({
       parseResult: { kind: 'transactions', entries: [food], confident: false },
     });
     send(deps, textMsg('ข้าว หกสิบ มั้ง'));
-    send(deps, postbackMsg(lastQuickReplyData()[1]));
+    send(deps, postbackMsg(button('reject')));
     expect(saved).toHaveLength(0);
     expect(lastText()).toContain('ไม่บันทึก');
   });
 
   it('does not save twice when confirm is pressed twice', () => {
-    const { deps, saved, lastText, lastQuickReplyData } = setup({
+    const { deps, saved, lastText, button } = setup({
       parseResult: { kind: 'transactions', entries: [food], confident: false },
     });
     send(deps, textMsg('ข้าว หกสิบ มั้ง'));
-    const [confirm] = lastQuickReplyData();
+    const confirm = button('confirm');
     send(deps, postbackMsg(confirm));
     send(deps, postbackMsg(confirm));
     expect(saved).toHaveLength(1);
@@ -220,17 +260,105 @@ describe('recording entries', () => {
 
 });
 
+describe('slips and receipts', () => {
+  const image = (id = 'img1') => ({ type: 'message', message: { id, type: 'image' } });
+
+  it('shows a slip card and saves it with its ref on confirm', () => {
+    const { deps, saved, last, lastText, button } = setup();
+    send(deps, image());
+    expect(saved).toHaveLength(0);
+    expect(last()?.type).toBe('flex');
+    expect(lastText()).toContain('สลิปโอนเงิน');
+    expect(lastText()).toContain('−640 บาท');
+    expect(lastText()).toContain('บิล/สาธารณูปโภค · การไฟฟ้า');
+    expect(lastText()).toContain('9 ต.ค.');
+
+    send(deps, postbackMsg(button('confirm')));
+    expect(saved).toEqual([
+      { id: 'id2', entries: [slip.kind === 'transaction' && slip.entry], source: 'slip', userId: ALLOWED, ref: '2026100912345' },
+    ]);
+  });
+
+  it('flips a slip to income, moving the note to the sender and fixing the category', () => {
+    const { deps, saved, lastText, button } = setup();
+    send(deps, image());
+    send(deps, postbackMsg(button('toggle')));
+    expect(lastText()).toContain('+640 บาท');
+    expect(lastText()).toContain('อื่นๆ · นาย ก');
+    expect(button('toggle')).not.toBe('');
+
+    send(deps, postbackMsg(button('confirm')));
+    expect(saved[0].entries[0]).toMatchObject({ type: 'income', category: 'อื่นๆ', note: 'นาย ก' });
+  });
+
+  it('rejects a slip that is already saved', () => {
+    const { deps, saved, lastText, button } = setup();
+    send(deps, image('a'));
+    send(deps, postbackMsg(button('confirm')));
+    send(deps, image('b'));
+    expect(lastText()).toContain('สลิปนี้บันทึกไปแล้ว');
+    expect(saved).toHaveLength(1);
+  });
+
+  it('keeps several slips pending at once, each confirmable from its own card', () => {
+    const { deps, saved, button } = setup({ imageResult: { ...slip, ref: '' } as ImageResult });
+    send(deps, image('a'));
+    const first = button('confirm');
+    send(deps, image('b'));
+    const second = button('confirm');
+    expect(first).not.toBe(second);
+
+    send(deps, postbackMsg(first));
+    send(deps, postbackMsg(second));
+    expect(saved).toHaveLength(2);
+  });
+
+  it('does not save the same slip twice when two cards for it are confirmed', () => {
+    const { deps, saved, lastText, button } = setup();
+    send(deps, image('a'));
+    const first = button('confirm');
+    send(deps, image('b'));
+    const second = button('confirm');
+    send(deps, postbackMsg(first));
+    send(deps, postbackMsg(second));
+    expect(saved).toHaveLength(1);
+    expect(lastText()).toContain('บันทึกไปแล้ว');
+  });
+
+  it('allows a slip again after its entry was cancelled', () => {
+    const { deps, saved, lastText, button } = setup();
+    send(deps, image('a'));
+    send(deps, postbackMsg(button('confirm')));
+    send(deps, textMsg('ยกเลิก'));
+    send(deps, image('b'));
+    expect(lastText()).toContain('สลิปโอนเงิน');
+    send(deps, postbackMsg(button('confirm')));
+    expect(saved).toHaveLength(2);
+  });
+
+  it.each([
+    [{ kind: 'other' } as ImageResult, 'ไม่ใช่สลิปหรือใบเสร็จ'],
+    [{ kind: 'unreadable' } as ImageResult, 'อ่านยอดเงินในรูปไม่ได้'],
+    [new Error('Gemini 503'), 'อ่านรูปไม่สำเร็จ'],
+  ])('saves nothing for %s', (imageResult, message) => {
+    const { deps, saved, lastText } = setup({ imageResult });
+    send(deps, image());
+    expect(saved).toHaveLength(0);
+    expect(lastText()).toContain(message);
+  });
+});
+
 describe('voice', () => {
   const audio = (duration = 3000) => ({ type: 'message', message: { id: 'a1', type: 'audio', duration } });
 
   it('always asks to confirm a voice entry, even when confident, and shows what it heard', () => {
-    const { deps, saved, lastText, lastQuickReplyData } = setup();
+    const { deps, saved, lastText, button } = setup();
     send(deps, audio());
     expect(saved).toHaveLength(0);
-    expect(lastText()).toContain('🎤 "ข้าวมันไก่หกสิบ"');
-    expect(lastText()).toContain('ถูกไหม');
+    expect(lastText()).toContain('ข้อความเสียง');
+    expect(lastText()).toContain('“ข้าวมันไก่หกสิบ”');
 
-    send(deps, postbackMsg(lastQuickReplyData()[0]));
+    send(deps, postbackMsg(button('confirm')));
     expect(saved).toEqual([{ id: 'id2', entries: [food], source: 'voice', userId: ALLOWED }]);
   });
 

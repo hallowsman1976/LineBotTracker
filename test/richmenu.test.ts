@@ -41,8 +41,9 @@ describe('rich menu', () => {
         newId: () => 'x',
         parse: () => { reachedLlm = true; return { kind: 'not_transaction' as const }; },
         parseVoice: () => { throw new Error('unused'); },
-        ledger: { add: () => {}, cancel: () => [], list: () => [] },
-        pending: { put: () => {}, take: () => null },
+        parseImage: () => { throw new Error('unused'); },
+        ledger: { add: () => {}, cancel: () => [], list: () => [], hasRef: () => false },
+        pending: { put: () => {}, get: () => null, take: () => null },
       } satisfies WebhookDeps;
       const event = { type: 'message', webhookEventId: text, replyToken: 'rt', source: { type: 'user', userId: 'U' }, message: { id: 'm', type: 'text', text } };
       handleWebhook(JSON.stringify({ events: [event] }), 't', deps);

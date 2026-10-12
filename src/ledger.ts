@@ -10,6 +10,8 @@ export interface SaveMeta {
   userId: string;
   rawText: string;
   source: string;
+  /** Slip reference number, used to reject the same slip twice. */
+  ref?: string;
 }
 
 function withLock<T>(fn: () => T): T {
@@ -62,6 +64,7 @@ export function addEntries(id: string, entries: Entry[], meta: SaveMeta): void {
         userId: meta.userId,
         source: meta.source,
         rawText: asText(meta.rawText),
+        ref: meta.ref ? `'${meta.ref}` : '', // forced text, or a numeric ref loses leading zeros
         timestamp: now,
         status: ACTIVE,
       };
@@ -109,9 +112,25 @@ export function listEntries(userId: string, from: string, to: string): LedgerEnt
     .getRange(2, 1, lastRow - 1, headers.length)
     .getValues()
     .filter((row) => row[col('userId')] === userId && row[col('status')] !== CANCELLED)
-    .map((row) => ({ ...toEntry(row, col), entryId: col('entryId') >= 0 ? String(row[col('entryId')]) : '' }))
+    .map((row) => ({
+      ...toEntry(row, col),
+      entryId: col('entryId') >= 0 ? String(row[col('entryId')]) : '',
+      source: String(row[col('source')] ?? ''),
+    }))
     .filter((e) => e.date >= from && e.date <= to)
     .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}
+
+/** True when an active entry of this user already has this slip reference number. */
+export function hasActiveRef(userId: string, ref: string): boolean {
+  const { sheet, headers } = txSheet();
+  const col = (name: string) => headers.indexOf(name);
+  const lastRow = sheet.getLastRow();
+  if (col('ref') < 0 || lastRow < 2) return false;
+  return sheet
+    .getRange(2, 1, lastRow - 1, headers.length)
+    .getValues()
+    .some((row) => String(row[col('ref')]) === ref && row[col('userId')] === userId && row[col('status')] !== CANCELLED);
 }
 
 /** Overwrites one active entry of this user. Returns false when there is no such entry. */

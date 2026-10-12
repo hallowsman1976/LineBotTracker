@@ -3,7 +3,7 @@ const CATEGORY_ICONS: Record<string, string> = {
   อาหาร: 'ph-fork-knife',
   เดินทาง: 'ph-car-simple',
   ของใช้: 'ph-shopping-bag',
-  'บิล/สาธารณูปโภค': 'ph-receipt',
+  'บิล/สาธารณูปโภค': 'ph-lightning', // ph-receipt is reserved for the "from a slip" badge
   บันเทิง: 'ph-film-slate',
   สุขภาพ: 'ph-heartbeat',
   เงินเดือน: 'ph-briefcase',
