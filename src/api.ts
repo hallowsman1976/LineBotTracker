@@ -1,5 +1,6 @@
 // Dashboard API (POST ...exec?api=1). Pure like webhook.ts; side effects come in through ApiDeps.
 import { bangkokDate, validateEntryInput, type Entry, type LedgerEntry } from './parse';
+import { saveRule, type RecurringIncome, type RecurringStore } from './recurring';
 import { monthRange } from './summary';
 
 /** Thrown by verifyIdToken when LINE rejects the token (expired, wrong channel, forged). */
@@ -16,6 +17,8 @@ export interface ApiDeps {
     update(userId: string, entryId: string, entry: Entry): boolean;
     remove(userId: string, entryId: string): boolean;
   };
+  recurring: RecurringStore;
+  newId(): string;
   log(level: 'INFO' | 'WARN' | 'ERROR', message: string, detail?: string): void;
 }
 
@@ -30,12 +33,19 @@ export interface MonthData {
   entries: LedgerEntry[];
 }
 
+export interface RecurringData {
+  rules: RecurringIncome[];
+}
+
 interface ApiRequest {
   action?: unknown;
   idToken?: unknown;
   month?: unknown;
   entryId?: unknown;
   entry?: unknown;
+  /** Recurring rule id; omitted on recurringSave to create a new rule. */
+  id?: unknown;
+  rule?: unknown;
 }
 
 export function handleApi(rawBody: string, deps: ApiDeps): ApiResponse {
@@ -64,6 +74,12 @@ export function handleApi(rawBody: string, deps: ApiDeps): ApiResponse {
         return updateEntry(deps, userId, req.entryId, req.entry);
       case 'delete':
         return deleteEntry(deps, userId, req.entryId);
+      case 'recurring':
+        return { ok: true, data: { rules: deps.recurring.list(userId) } };
+      case 'recurringSave':
+        return saveRecurring(deps, userId, req.id, req.rule);
+      case 'recurringDelete':
+        return deleteRecurring(deps, userId, req.id);
       default:
         return fail('bad_request', 'unknown action');
     }
@@ -91,6 +107,20 @@ function deleteEntry(deps: ApiDeps, userId: string, entryId: unknown): ApiRespon
   if (typeof entryId !== 'string' || !entryId) return fail('bad_request', 'entryId required');
   if (!deps.ledger.remove(userId, entryId)) return fail('not_found');
   return { ok: true, data: { entryId } };
+}
+
+function saveRecurring(deps: ApiDeps, userId: string, id: unknown, rule: unknown): ApiResponse<RecurringIncome> {
+  if (id !== undefined && (typeof id !== 'string' || !id)) return fail('bad_request', 'id must be a string');
+  const saved = saveRule(deps.recurring, userId, id as string | undefined, rule, bangkokDate(deps.now()), deps.newId);
+  if (saved === null) return fail('not_found');
+  if (typeof saved === 'string') return fail('bad_request', saved);
+  return { ok: true, data: saved };
+}
+
+function deleteRecurring(deps: ApiDeps, userId: string, id: unknown): ApiResponse<{ id: string }> {
+  if (typeof id !== 'string' || !id) return fail('bad_request', 'id required');
+  if (!deps.recurring.remove(userId, id)) return fail('not_found');
+  return { ok: true, data: { id } };
 }
 
 function fail(error: ApiError, message?: string): { ok: false; error: ApiError; message?: string } {

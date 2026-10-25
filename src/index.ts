@@ -9,6 +9,7 @@ import {
   cancelEntries,
   hasActiveRef,
   listEntries,
+  newEntryId,
   removeEntry,
   updateEntry,
 } from './ledger';
@@ -16,6 +17,8 @@ import richMenuImage from '../assets/richmenu.png';
 import { getMessageContentBase64, lineApi, push, reply } from './line';
 import { runMonthlySummary, type MonthlyDeps } from './monthly';
 import { LIFF_ID } from './publicConfig';
+import { runRecurringIncome } from './recurring';
+import { recurringStore } from './recurringStore';
 import { RICH_MENU_NAME, richMenuBody } from './richmenu';
 import { bangkokDate } from './parse';
 import { getPending, putPending, takePending } from './pending';
@@ -30,6 +33,8 @@ export function doPost(e: GoogleAppsScript.Events.DoPost): GoogleAppsScript.Cont
         isAllowedUser,
         now: () => new Date(),
         ledger: { list: listEntries, update: updateEntry, remove: removeEntry },
+        recurring: recurringStore,
+        newId: newEntryId,
         log,
       }),
     );
@@ -44,13 +49,14 @@ export function doPost(e: GoogleAppsScript.Events.DoPost): GoogleAppsScript.Cont
     reply,
     log,
     now: () => new Date(),
-    newId: () => Utilities.getUuid().replace(/-/g, '').slice(0, 12),
+    newId: newEntryId,
     parse: parseWithGemini,
     parseVoice: (messageId, today) => parseVoiceWithGemini(getMessageContentBase64(messageId), today),
     parseImage: (messageId, userId, today) =>
       parseImageWithGemini(getMessageContentBase64(messageId), today, accountNamesFor(userId)),
     ledger: { add: addEntries, cancel: cancelEntries, list: listEntries, hasRef: hasActiveRef },
     pending: { put: putPending, get: getPending, take: takePending },
+    recurring: recurringStore,
   });
   return json({ result });
 }
@@ -163,16 +169,47 @@ export function monthlySummaryTrigger(): void {
   runMonthlySummary(monthlyDeps());
 }
 
+const RECURRING_TRIGGER_HANDLER = 'recurringIncomeTrigger';
+
+/** Daily time-trigger handler (07:00): records recurring income such as salary on its day. */
+export function recurringIncomeTrigger(): void {
+  runRecurringIncome(recurringDeps());
+}
+
+function recurringDeps() {
+  return {
+    now: () => new Date(),
+    newId: newEntryId,
+    activeUserIds,
+    store: recurringStore,
+    ledger: { add: addEntries, hasRef: hasActiveRef },
+    push,
+    log,
+  };
+}
+
 /**
- * Run once from the editor: installs a daily trigger at 20:00 Bangkok
- * (Apps Script fires it some time within 20:00–21:00). Re-running replaces it.
+ * Run once from the editor: installs the daily triggers (Apps Script fires each within the hour):
+ * 07:00 Bangkok records recurring income, 20:00 sends the month-end summary. Re-running replaces them.
  */
-export function setupMonthlyTrigger(): void {
+export function setupTriggers(): void {
+  const handlers = [MONTHLY_TRIGGER_HANDLER, RECURRING_TRIGGER_HANDLER];
   for (const trigger of ScriptApp.getProjectTriggers()) {
-    if (trigger.getHandlerFunction() === MONTHLY_TRIGGER_HANDLER) ScriptApp.deleteTrigger(trigger);
+    if (handlers.includes(trigger.getHandlerFunction())) ScriptApp.deleteTrigger(trigger);
   }
+  ScriptApp.newTrigger(RECURRING_TRIGGER_HANDLER).timeBased().everyDays(1).atHour(7).inTimezone('Asia/Bangkok').create();
   ScriptApp.newTrigger(MONTHLY_TRIGGER_HANDLER).timeBased().everyDays(1).atHour(20).inTimezone('Asia/Bangkok').create();
-  console.log('Daily 20:00 trigger installed; it sends on the last day of each month');
+  console.log('Daily triggers installed: 07:00 recurring income, 20:00 month-end summary');
+}
+
+/** Kept so the name in older instructions still works; installs both triggers. */
+export function setupMonthlyTrigger(): void {
+  setupTriggers();
+}
+
+/** Editor test: records any recurring income that is due today right now (same as the 07:00 run). */
+export function runRecurringIncomeNow(): void {
+  console.log(`recorded ${runRecurringIncome(recurringDeps())} entr(ies)`);
 }
 
 /** Editor test: pushes this month's summary to every active user right now. */

@@ -134,6 +134,11 @@ button {
   font-weight: 600;
 }
 
+.top-actions {
+  display: flex;
+  gap: var(--s1);
+}
+
 .icon-btn {
   display: grid;
   place-items: center;
@@ -632,6 +637,44 @@ button {
   grid-template-columns: auto 1fr;
   gap: var(--s3);
   margin-top: var(--s2);
+}
+
+.sheet h2.with-back {
+  display: flex;
+  align-items: center;
+}
+
+.sheet h2 .back {
+  width: 36px;
+  height: 36px;
+  margin: -6px var(--s1) -6px -10px;
+}
+
+.sheet-hint {
+  margin: calc(var(--s2) * -1) 0 var(--s4);
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.sheet .rows {
+  margin-bottom: var(--s4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.btn.block {
+  width: 100%;
+}
+
+select.text-input {
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%),
+    linear-gradient(135deg, var(--text-3) 50%, transparent 50%);
+  background-position: calc(100% - 22px) 50%, calc(100% - 16px) 50%;
+  background-size: 6px 6px;
+  background-repeat: no-repeat;
+  color: inherit;
+  font: inherit;
 }
 
 /* ---------- Toast ---------- */

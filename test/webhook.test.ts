@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Entry, ImageResult, ParseResult, VoiceResult } from '../src/parse';
+import { memRecurring } from './memRecurring';
 import { handleWebhook, type LineEvent, type LineMessage, type Pending, type WebhookDeps } from '../src/webhook';
 
 const TOKEN = 'secret-token';
@@ -31,6 +32,7 @@ function setup(
   const seen = new Set<string>();
   const pendings = new Map<string, Pending>();
   let ids = 0;
+  const recurring = memRecurring();
   const {
     parseResult = { kind: 'transactions', entries: [food], confident: true },
     voiceResult = { transcript: 'ข้าวมันไก่หกสิบ', intent: 'record', result: { kind: 'transactions', entries: [food], confident: true } },
@@ -83,6 +85,7 @@ function setup(
         return p;
       },
     },
+    recurring: recurring.store,
     ...rest,
   };
   const last = () => replies[replies.length - 1]?.messages[0];
@@ -102,7 +105,7 @@ function setup(
   };
   const button = (action: 'confirm' | 'toggle' | 'reject') =>
     lastQuickReplyData().find((d) => d.startsWith(`a=${action}&`)) ?? '';
-  return { deps, replies, saved, cancelled, logs, last, lastText, lastQuickReplyData, button };
+  return { deps, replies, saved, cancelled, logs, last, lastText, lastQuickReplyData, button, recurring: recurring.rows };
 }
 
 function collect(node: unknown, key: string): string[] {
@@ -461,5 +464,48 @@ describe('commands', () => {
     const { deps, lastText } = setup();
     send(deps, textMsg('วิธีใช้'));
     expect(lastText()).toContain('วิธีใช้');
+  });
+});
+
+describe('recurring income commands', () => {
+  it('sets the salary without sending it to the LLM or recording income today', () => {
+    let parsed = 0;
+    const { deps, saved, recurring, lastText } = setup({ parse: () => { parsed++; return { kind: 'not_transaction' }; } });
+    send(deps, textMsg('ตั้งเงินเดือน 30,000 บาท ทุกวันที่ 25'));
+    expect(parsed).toBe(0);
+    expect(saved).toHaveLength(0);
+    expect(recurring).toEqual([
+      { id: 'id1', userId: ALLOWED, amount: 30000, category: 'เงินเดือน', note: '', day: 25, lastPosted: '' },
+    ]);
+    expect(lastText()).toContain('ครั้งถัดไป 25 ต.ค.');
+  });
+
+  it('updates the existing salary rule instead of adding a second', () => {
+    const { deps, recurring, lastText } = setup();
+    send(deps, textMsg('ตั้งเงินเดือน 30000 วันที่ 25'));
+    send(deps, textMsg('ตั้งเงินเดือน 32000 วันที่ 1'));
+    expect(recurring).toHaveLength(1);
+    // Day 1 already passed this month, so the first automatic entry is next month's.
+    expect(recurring[0]).toMatchObject({ amount: 32000, day: 1, lastPosted: '2026-10' });
+    expect(lastText()).toContain('แก้เงินเดือนแล้ว');
+    expect(lastText()).toContain('ครั้งถัดไป 1 พ.ย.');
+  });
+
+  it('explains the format when the command is incomplete or invalid', () => {
+    const { deps, recurring, lastText } = setup();
+    send(deps, textMsg('ตั้งเงินเดือน 30000'));
+    expect(lastText()).toContain('พิมพ์แบบนี้');
+    send(deps, textMsg('ตั้งเงินเดือน 30000 วันที่ 40'));
+    expect(lastText()).toContain('วันที่ต้องเป็น 1–31');
+    expect(recurring).toHaveLength(0);
+  });
+
+  it('lists recurring income', () => {
+    const { deps, lastText } = setup();
+    send(deps, textMsg('รายรับประจำ'));
+    expect(lastText()).toContain('ยังไม่ได้ตั้งรายรับประจำ');
+    send(deps, textMsg('ตั้งเงินเดือน 30000 วันที่ 31'));
+    send(deps, textMsg('รายรับประจำ'));
+    expect(lastText()).toContain('• เงินเดือน +30,000 บาท · ทุกสิ้นเดือน (ครั้งถัดไป 31 ต.ค.)');
   });
 });

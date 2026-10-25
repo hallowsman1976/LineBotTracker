@@ -1,6 +1,7 @@
 // Talks to the Apps Script API, or to an in-memory demo backend when no LIFF app is configured.
-import type { ApiError, ApiResponse, MonthData } from '../../src/api';
+import type { ApiError, ApiResponse, MonthData, RecurringData } from '../../src/api';
 import type { Entry, LedgerEntry } from '../../src/parse';
+import { settleLastPosted, type RecurringIncome, type RecurringInput } from '../../src/recurring';
 
 export class ApiFailure extends Error {
   constructor(
@@ -16,6 +17,10 @@ export interface Backend {
   month(month: string): Promise<LedgerEntry[]>;
   update(entryId: string, entry: Entry): Promise<LedgerEntry>;
   remove(entryId: string): Promise<void>;
+  recurring(): Promise<RecurringIncome[]>;
+  /** Creates a rule when id is omitted. */
+  saveRecurring(id: string | undefined, rule: RecurringInput): Promise<RecurringIncome>;
+  removeRecurring(id: string): Promise<void>;
 }
 
 export class ApiBackend implements Backend {
@@ -34,6 +39,18 @@ export class ApiBackend implements Backend {
 
   async remove(entryId: string) {
     await this.call({ action: 'delete', entryId });
+  }
+
+  async recurring() {
+    return (await this.call<RecurringData>({ action: 'recurring' })).rules;
+  }
+
+  saveRecurring(id: string | undefined, rule: RecurringInput) {
+    return this.call<RecurringIncome>({ action: 'recurringSave', id, rule });
+  }
+
+  async removeRecurring(id: string) {
+    await this.call({ action: 'recurringDelete', id });
   }
 
   private async call<T>(body: Record<string, unknown>): Promise<T> {
@@ -59,9 +76,12 @@ export class ApiBackend implements Backend {
 /** Fake data so the UI can be previewed without LINE (?demo=1, or before LIFF_ID is set). */
 export class DemoBackend implements Backend {
   private entries: LedgerEntry[];
+  private rules: RecurringIncome[];
+  private ids = 0;
 
-  constructor(today: string) {
+  constructor(private readonly today: string) {
     this.entries = demoEntries(today);
+    this.rules = [{ id: 'demo-r1', amount: 25000, category: 'เงินเดือน', note: '', day: 1, lastPosted: today.slice(0, 7) }];
   }
 
   async month(month: string) {
@@ -79,6 +99,24 @@ export class DemoBackend implements Backend {
   async remove(entryId: string) {
     await delay(250);
     this.entries = this.entries.filter((e) => e.entryId !== entryId);
+  }
+
+  async recurring() {
+    await delay(250);
+    return this.rules;
+  }
+
+  async saveRecurring(id: string | undefined, rule: RecurringInput) {
+    await delay(250);
+    const existing = this.rules.find((r) => r.id === id);
+    const saved = { ...rule, id: id ?? `demo-new${++this.ids}`, lastPosted: settleLastPosted(existing?.lastPosted ?? '', rule.day, this.today) };
+    this.rules = existing ? this.rules.map((r) => (r.id === id ? saved : r)) : [...this.rules, saved];
+    return saved;
+  }
+
+  async removeRecurring(id: string) {
+    await delay(250);
+    this.rules = this.rules.filter((r) => r.id !== id);
   }
 }
 

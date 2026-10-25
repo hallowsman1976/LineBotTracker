@@ -4,6 +4,7 @@ import './styles.css';
 import { formatBaht, formatThaiDate } from '../../src/format';
 import { bangkokDate, CATEGORIES, type Entry, type LedgerEntry, type TxType } from '../../src/parse';
 import { API_URL, LIFF_ID } from '../../src/publicConfig';
+import { dayText, nextDueDate, type RecurringIncome } from '../../src/recurring';
 import { thaiMonthYear } from '../../src/summary';
 import { ApiBackend, ApiFailure, DemoBackend, type Backend } from './backend';
 import { categoryIcon } from './icons';
@@ -69,9 +70,12 @@ function render(): void {
           <i class="ph ph-caret-right"></i>
         </button>
       </div>
-      <button class="icon-btn" data-action="theme" aria-label="สลับโหมดสว่าง/มืด">
-        <i class="ph ${isDark() ? 'ph-sun' : 'ph-moon'}"></i>
-      </button>
+      <div class="top-actions">
+        <button class="icon-btn" data-action="recurring" aria-label="รายรับประจำ"><i class="ph ph-repeat"></i></button>
+        <button class="icon-btn" data-action="theme" aria-label="สลับโหมดสว่าง/มืด">
+          <i class="ph ${isDark() ? 'ph-sun' : 'ph-moon'}"></i>
+        </button>
+      </div>
     </header>
     ${state.demo ? '<div class="demo-pill"><i class="ph ph-flask"></i> โหมดตัวอย่าง · ข้อมูลสมมติ</div>' : ''}
     <main>${renderBody()}</main>`;
@@ -207,7 +211,9 @@ function renderRow(e: LedgerEntry): string {
   const fromImage = e.source === 'slip' || e.source === 'receipt';
   const badge = fromImage
     ? `<i class="ph ph-receipt source-badge" aria-label="${e.source === 'slip' ? 'จากสลิป' : 'จากใบเสร็จ'}"></i>`
-    : '';
+    : e.source === 'recurring'
+      ? '<i class="ph ph-repeat source-badge" aria-label="รายรับประจำ"></i>'
+      : '';
   return `
     <button class="row" data-action="edit" data-id="${esc(e.entryId)}">
       <span class="cat-icon"><i class="ph ${categoryIcon(e.category)}"></i></span>
@@ -309,8 +315,9 @@ function renderDraft(): void {
 function closeSheet(): void {
   document.body.classList.remove('sheet-open');
   editing = null;
+  recurringOpen = false;
   setTimeout(() => {
-    if (!editing) $('#sheet-root').innerHTML = '';
+    if (!editing && !recurringOpen) $('#sheet-root').innerHTML = '';
   }, 250);
 }
 
@@ -359,9 +366,8 @@ function clientCheck(e: Entry): string {
 
 let deleteArmed: number | undefined;
 
-async function deleteEditing(button: HTMLButtonElement): Promise<void> {
-  if (!editing) return;
-  // First tap arms the button, second tap within 3s deletes: no surprise data loss, no native confirm().
+/** First tap arms the button, second tap within 3s confirms: no surprise data loss, no native confirm(). */
+function confirmDelete(button: HTMLButtonElement): boolean {
   if (deleteArmed === undefined) {
     button.classList.add('armed');
     button.innerHTML = '<i class="ph ph-trash"></i> ยืนยันลบ';
@@ -370,10 +376,15 @@ async function deleteEditing(button: HTMLButtonElement): Promise<void> {
       button.classList.remove('armed');
       button.innerHTML = '<i class="ph ph-trash"></i> ลบ';
     }, 3000);
-    return;
+    return false;
   }
   clearTimeout(deleteArmed);
   deleteArmed = undefined;
+  return true;
+}
+
+async function deleteEditing(button: HTMLButtonElement): Promise<void> {
+  if (!editing || !confirmDelete(button)) return;
 
   const target = editing;
   const before = state.entries;
@@ -386,6 +397,171 @@ async function deleteEditing(button: HTMLButtonElement): Promise<void> {
   } catch {
     state.entries = before;
     render();
+    toast('ลบไม่สำเร็จ ลองใหม่อีกครั้ง');
+  }
+}
+
+// ---------------------------------------------------------------- recurring income sheet
+
+let recurringOpen = false;
+/** null while loading */
+let rules: RecurringIncome[] | null = null;
+/** The rule in the form; 'new' while adding one, null while the list shows. */
+let editingRule: RecurringIncome | 'new' | null = null;
+
+async function openRecurring(): Promise<void> {
+  recurringOpen = true;
+  editingRule = null;
+  rules = null;
+  renderRecurring();
+  requestAnimationFrame(() => document.body.classList.add('sheet-open'));
+  try {
+    rules = await backend.recurring();
+  } catch (err) {
+    closeSheet();
+    const code = err instanceof ApiFailure ? err.code : 'network';
+    if (code === 'forbidden' || code === 'unauthorized') {
+      handleFailure(err);
+      render();
+    } else {
+      toast('โหลดรายรับประจำไม่สำเร็จ ลองใหม่อีกครั้ง');
+    }
+    return;
+  }
+  if (recurringOpen && !editingRule) renderRecurring();
+}
+
+function renderRecurring(): void {
+  $('#sheet-root').innerHTML = `
+    <div class="scrim" data-action="close"></div>
+    ${editingRule ? ruleForm(editingRule) : ruleList()}`;
+  if (editingRule) renderDraft();
+}
+
+function ruleList(): string {
+  const body =
+    rules === null
+      ? '<div class="skeleton" style="height:64px;margin-bottom:16px"></div>'
+      : rules.length === 0
+        ? `<div class="state" style="padding:var(--s6) var(--s4)"><i class="ph ph-repeat"></i><h3>ยังไม่ได้ตั้งรายรับประจำ</h3>
+             <p>เช่น เงินเดือน ระบบจะบันทึกเป็นรายรับให้เองทุกเดือน</p></div>`
+        : `<div class="rows">${rules.map(ruleRow).join('')}</div>`;
+  return `
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+      <div class="grabber"></div>
+      <h2 id="sheet-title">รายรับประจำ</h2>
+      <p class="sheet-hint">บันทึกให้อัตโนมัติตามวันที่ตั้งไว้ (ราว 7 โมงเช้า) แล้วแจ้งในแชท LINE พร้อมปุ่มยกเลิก</p>
+      ${body}
+      <button class="btn btn-primary block" data-action="rule-new" ${rules === null ? 'disabled' : ''}>
+        <i class="ph ph-plus"></i> เพิ่มรายรับประจำ
+      </button>
+    </div>`;
+}
+
+function ruleRow(r: RecurringIncome): string {
+  return `
+    <button class="row" data-action="rule-edit" data-id="${esc(r.id)}">
+      <span class="cat-icon"><i class="ph ${categoryIcon(r.category)}"></i></span>
+      <span style="min-width:0">
+        <div class="title">${esc(r.note || r.category)}</div>
+        <div class="sub">${dayText(r.day)} · ครั้งถัดไป ${formatThaiDate(nextDueDate(r, state.today))}</div>
+      </span>
+      <span class="amount num income">${baht(r.amount, '+')}</span>
+    </button>`;
+}
+
+function ruleForm(rule: RecurringIncome | 'new'): string {
+  const r = rule === 'new' ? { amount: '', note: '', day: 25 } : rule;
+  const days = Array.from({ length: 31 }, (_, i) => i + 1)
+    .map((d) => `<option value="${d}" ${d === r.day ? 'selected' : ''}>${d === 31 ? 'สิ้นเดือน' : `วันที่ ${d}`}</option>`)
+    .join('');
+  const left =
+    rule === 'new'
+      ? '<button type="button" class="btn btn-quiet" data-action="rule-back">ยกเลิก</button>'
+      : '<button type="button" class="btn btn-danger" data-action="rule-delete"><i class="ph ph-trash"></i> ลบ</button>';
+  return `
+    <form class="sheet" id="rule-form" role="dialog" aria-modal="true" aria-labelledby="sheet-title" novalidate>
+      <div class="grabber"></div>
+      <h2 id="sheet-title" class="with-back">
+        <button type="button" class="icon-btn back" data-action="rule-back" aria-label="กลับ"><i class="ph ph-caret-left"></i></button>
+        ${rule === 'new' ? 'เพิ่มรายรับประจำ' : 'แก้ไขรายรับประจำ'}
+      </h2>
+      <div class="field">
+        <label class="label" for="f-amount">จำนวนเงินต่อเดือน</label>
+        <div class="amount-input">
+          <input id="f-amount" class="num" inputmode="decimal" autocomplete="off" value="${r.amount}" placeholder="0">
+          <span>บาท</span>
+        </div>
+      </div>
+      <div class="field">
+        <label class="label" for="f-day">บันทึกทุกเดือน</label>
+        <select id="f-day" class="text-input">${days}</select>
+      </div>
+      <div class="field">
+        <span class="label">หมวด</span>
+        <div class="cat-grid" id="f-cats"></div>
+      </div>
+      <div class="field">
+        <label class="label" for="f-note">โน้ต</label>
+        <input id="f-note" class="text-input" maxlength="100" value="${esc(r.note)}" placeholder="เช่น บริษัท ABC">
+      </div>
+      <div class="form-error" id="f-error" role="alert"></div>
+      <div class="sheet-actions">
+        ${left}
+        <button type="submit" class="btn btn-primary">บันทึก</button>
+      </div>
+    </form>`;
+}
+
+/** The form reuses the entry sheet's category grid, so it sets the same draft state. */
+function editRule(rule: RecurringIncome | 'new'): void {
+  editingRule = rule;
+  draftType = 'income';
+  draftCategory = rule === 'new' ? 'เงินเดือน' : rule.category;
+  renderRecurring();
+}
+
+async function saveRuleDraft(button: HTMLButtonElement): Promise<void> {
+  if (!editingRule) return;
+  const id = editingRule === 'new' ? undefined : editingRule.id;
+  const input = {
+    amount: Number(($<HTMLInputElement>('#f-amount').value || '').replace(/,/g, '')),
+    category: draftCategory,
+    note: $<HTMLInputElement>('#f-note').value.trim(),
+    day: Number($<HTMLSelectElement>('#f-day').value),
+  };
+  if (!Number.isFinite(input.amount) || input.amount <= 0) {
+    $('#f-error').textContent = 'ใส่จำนวนเงินมากกว่า 0';
+    return;
+  }
+
+  // Not optimistic: the server decides the next date, which the toast shows.
+  button.disabled = true;
+  try {
+    const saved = await backend.saveRecurring(id, input);
+    rules = id ? (rules ?? []).map((r) => (r.id === id ? saved : r)) : [...(rules ?? []), saved];
+    editingRule = null;
+    renderRecurring();
+    toast(`บันทึกแล้ว ครั้งถัดไป ${formatThaiDate(nextDueDate(saved, state.today))}`);
+  } catch (err) {
+    button.disabled = false;
+    $('#f-error').textContent =
+      err instanceof ApiFailure && err.code === 'bad_request' && err.message ? err.message : 'บันทึกไม่สำเร็จ ลองใหม่อีกครั้ง';
+  }
+}
+
+async function deleteRule(button: HTMLButtonElement): Promise<void> {
+  if (!editingRule || editingRule === 'new' || !confirmDelete(button)) return;
+  const target = editingRule;
+  button.disabled = true;
+  try {
+    await backend.removeRecurring(target.id);
+    rules = (rules ?? []).filter((r) => r.id !== target.id);
+    editingRule = null;
+    renderRecurring();
+    toast('ลบแล้ว รายการที่บันทึกไปแล้วยังอยู่');
+  } catch {
+    button.disabled = false;
     toast('ลบไม่สำเร็จ ลองใหม่อีกครั้ง');
   }
 }
@@ -445,6 +621,24 @@ document.addEventListener('click', (ev) => {
     case 'theme':
       toggleTheme();
       break;
+    case 'recurring':
+      void openRecurring();
+      break;
+    case 'rule-new':
+      editRule('new');
+      break;
+    case 'rule-edit': {
+      const rule = rules?.find((r) => r.id === el.dataset.id);
+      if (rule) editRule(rule);
+      break;
+    }
+    case 'rule-back':
+      editingRule = null;
+      renderRecurring();
+      break;
+    case 'rule-delete':
+      void deleteRule(el as HTMLButtonElement);
+      break;
     case 'type':
       state.type = el.dataset.type as TypeFilter;
       render();
@@ -489,11 +683,13 @@ document.addEventListener('click', (ev) => {
 
 document.addEventListener('submit', (ev) => {
   ev.preventDefault();
-  void saveDraft();
+  const form = ev.target as HTMLFormElement;
+  if (form.id === 'rule-form') void saveRuleDraft(form.querySelector<HTMLButtonElement>('[type=submit]')!);
+  else void saveDraft();
 });
 
 document.addEventListener('keydown', (ev) => {
-  if (ev.key === 'Escape' && editing) closeSheet();
+  if (ev.key === 'Escape' && (editing || recurringOpen)) closeSheet();
 });
 
 // ---------------------------------------------------------------- boot

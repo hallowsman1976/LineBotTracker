@@ -14,7 +14,7 @@ export interface SaveMeta {
   ref?: string;
 }
 
-function withLock<T>(fn: () => T): T {
+export function withLock<T>(fn: () => T): T {
   const lock = LockService.getScriptLock();
   lock.waitLock(10_000);
   try {

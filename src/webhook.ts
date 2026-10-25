@@ -1,7 +1,7 @@
 // Pure webhook handling: no Apps Script globals here, so it runs under vitest.
 // Everything with side effects comes in through `WebhookDeps`.
 import { confirmCard } from './flex';
-import { formatEntries, HELP_TEXT, NOT_UNDERSTOOD_TEXT, SYSTEM_ERROR_TEXT } from './format';
+import { formatBaht, formatEntries, formatThaiDate, HELP_TEXT, NOT_UNDERSTOOD_TEXT, SYSTEM_ERROR_TEXT } from './format';
 import type { LineMessage, QuickReplyItem } from './lineTypes';
 import {
   bangkokDate,
@@ -14,6 +14,7 @@ import {
   type VoiceIntent,
   type VoiceResult,
 } from './parse';
+import { dayText, formatRule, nextDueDate, saveRule, type RecurringStore } from './recurring';
 import { formatSummary, rangeFor, type Period } from './summary';
 
 export type { LineMessage } from './lineTypes';
@@ -63,6 +64,7 @@ export interface WebhookDeps {
     /** True when an active entry of this user already carries this slip reference. */
     hasRef(userId: string, ref: string): boolean;
   };
+  recurring: RecurringStore;
   /** Several items can wait at once (e.g. a batch of slips), each under its own id. */
   pending: {
     put(userId: string, pending: Pending): void;
@@ -231,6 +233,9 @@ function handleText(ctx: Ctx, raw: string): void {
   const today = bangkokDate(ctx.deps.now());
   const period = SUMMARY_COMMANDS[input.replace(/\s+/g, '')];
   if (period) return summarize(ctx, period, today);
+  if (/^รายรับประจำ$/.test(input.replace(/\s+/g, ''))) return listRecurring(ctx, today);
+  // Checked before the LLM, which would otherwise record "ตั้งเงินเดือน 30000" as income received today.
+  if (/^ตั้ง\s*เงินเดือน/.test(input)) return setSalary(ctx, input, today);
 
   let result: ParseResult;
   try {
@@ -245,6 +250,32 @@ function handleText(ctx: Ctx, raw: string): void {
   if (result.kind === 'not_transaction') return say(ctx, NOT_UNDERSTOOD_TEXT);
   if (result.confident) return save(ctx, result.entries, input, 'text');
   askToConfirm(ctx, { id: ctx.deps.newId(), entries: result.entries, rawText: input, source: 'text' });
+}
+
+const SET_SALARY_USAGE = 'พิมพ์แบบนี้: ตั้งเงินเดือน 30000 วันที่ 25\n(วันที่ 31 = ทุกสิ้นเดือน)';
+
+/** "ตั้งเงินเดือน 30,000 บาท ทุกวันที่ 25": creates the salary rule, or updates the existing one. */
+function setSalary(ctx: Ctx, input: string, today: string): void {
+  const m = input.match(/^ตั้ง\s*เงินเดือน\s*([\d,]+(?:\.\d{1,2})?)\s*(?:บาท)?\s*(?:ทุก)?\s*(?:วันที่|วัน)\s*(\d{1,2})$/);
+  if (!m) return say(ctx, SET_SALARY_USAGE);
+
+  const existing = ctx.deps.recurring.list(ctx.userId).find((r) => r.category === 'เงินเดือน');
+  const rule = { amount: Number(m[1].replace(/,/g, '')), category: 'เงินเดือน', note: existing?.note ?? '', day: Number(m[2]) };
+  const saved = saveRule(ctx.deps.recurring, ctx.userId, existing?.id, rule, today, ctx.deps.newId);
+  if (saved === null) return say(ctx, SYSTEM_ERROR_TEXT);
+  if (typeof saved === 'string') return say(ctx, `${saved}\n${SET_SALARY_USAGE}`);
+  say(
+    ctx,
+    `✅ ${existing ? 'แก้' : 'ตั้ง'}เงินเดือนแล้ว\n+${formatBaht(saved.amount)} บาท ${dayText(saved.day)}\n` +
+      `จะบันทึกให้อัตโนมัติ ครั้งถัดไป ${formatThaiDate(nextDueDate(saved, today))}`,
+  );
+}
+
+function listRecurring(ctx: Ctx, today: string): void {
+  const rules = ctx.deps.recurring.list(ctx.userId);
+  if (rules.length === 0) return say(ctx, `ยังไม่ได้ตั้งรายรับประจำ\n${SET_SALARY_USAGE}\nหรือตั้งในแดชบอร์ด`);
+  const lines = rules.map((r) => formatRule(r, today)).join('\n');
+  say(ctx, `🔁 รายรับประจำ (บันทึกให้อัตโนมัติ)\n${lines}\n\nแก้ไขหรือลบได้ในแดชบอร์ด`);
 }
 
 function handlePostback(ctx: Ctx, data: string): void {

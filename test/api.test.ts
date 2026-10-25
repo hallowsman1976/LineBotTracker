@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { handleApi, InvalidTokenError, type ApiDeps } from '../src/api';
 import { validateEntryInput, type Entry, type LedgerEntry } from '../src/parse';
 import { monthRange } from '../src/summary';
+import { memRecurring } from './memRecurring';
 
 const TODAY = '2026-10-12';
 const NOW = new Date('2026-10-12T05:00:00Z');
@@ -14,6 +15,7 @@ function setup(overrides: Partial<ApiDeps> = {}) {
     { entryId: 'e3', userId: 'Uother', status: 'active', type: 'expense', amount: 99, category: 'อาหาร', note: '', date: '2026-10-06' },
   ];
   const logs: string[] = [];
+  const recurring = memRecurring();
   const own = (userId: string, entryId: string) =>
     rows.find((r) => r.entryId === entryId && r.userId === userId && r.status === 'active');
 
@@ -43,11 +45,13 @@ function setup(overrides: Partial<ApiDeps> = {}) {
         return true;
       },
     },
+    recurring: recurring.store,
+    newId: () => 'r1',
     log: (_l, message) => logs.push(message),
     ...overrides,
   };
   const call = (body: unknown) => handleApi(typeof body === 'string' ? body : JSON.stringify(body), deps);
-  return { call, rows, logs };
+  return { call, rows, logs, recurring: recurring.rows };
 }
 
 const edit = { type: 'expense', amount: 75, category: 'อาหาร', note: 'ข้าวมันไก่', date: '2026-10-05' };
@@ -155,5 +159,34 @@ describe('monthRange', () => {
 
   it('rejects malformed months', () => {
     for (const m of ['2026-1', '2026-00', '2026-13', 'oct', '']) expect(monthRange(m)).toBeNull();
+  });
+});
+
+describe('handleApi recurring income', () => {
+  const rule = { amount: 30000, category: 'เงินเดือน', note: 'บริษัท', day: 25 };
+
+  it('creates, lists, edits and deletes my rule', () => {
+    const { call, recurring } = setup();
+    expect(call({ action: 'recurringSave', idToken: 'good', rule })).toEqual({
+      ok: true, data: { ...rule, id: 'r1', lastPosted: '' },
+    });
+    expect(call({ action: 'recurring', idToken: 'good' })).toEqual({
+      ok: true, data: { rules: [{ ...rule, id: 'r1', lastPosted: '' }] },
+    });
+    // Moving the day before today marks this month as done instead of recording it late.
+    expect(call({ action: 'recurringSave', idToken: 'good', id: 'r1', rule: { ...rule, day: 5 } })).toMatchObject({
+      ok: true, data: { day: 5, lastPosted: '2026-10' },
+    });
+    expect(call({ action: 'recurringDelete', idToken: 'good', id: 'r1' })).toEqual({ ok: true, data: { id: 'r1' } });
+    expect(recurring).toHaveLength(0);
+  });
+
+  it('validates and scopes rules to the user', () => {
+    const { call } = setup();
+    expect(call({ action: 'recurringSave', idToken: 'good', rule: { ...rule, day: 32 } })).toEqual({
+      ok: false, error: 'bad_request', message: 'วันที่ต้องเป็น 1–31',
+    });
+    expect(call({ action: 'recurringSave', idToken: 'good', id: 'nope', rule })).toEqual({ ok: false, error: 'not_found' });
+    expect(call({ action: 'recurringDelete', idToken: 'good', id: 'nope' })).toEqual({ ok: false, error: 'not_found' });
   });
 });

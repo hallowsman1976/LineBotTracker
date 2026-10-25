@@ -32,4 +32,5 @@ export const SHEETS = {
   transactions: ['id', 'entryId', 'date', 'type', 'amount', 'category', 'note', 'userId', 'source', 'rawText', 'timestamp', 'status', 'ref'],
   users: ['userId', 'name', 'active', 'addedAt', 'accountNames'],
   logs: ['timestamp', 'level', 'message', 'detail'],
+  recurring: ['id', 'userId', 'amount', 'category', 'note', 'day', 'lastPosted', 'status', 'createdAt'],
 } as const;

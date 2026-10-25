@@ -6,7 +6,8 @@ import { build } from 'esbuild';
 import { copyFileSync, mkdirSync, rmSync } from 'node:fs';
 
 const GLOBALS = ['doPost', 'doGet', 'setup', 'checkProperties', 'showWebhookUrl', 'testGemini', 'setupRichMenu',
-  'monthlySummaryTrigger', 'setupMonthlyTrigger', 'sendMonthlySummaryNow'];
+  'monthlySummaryTrigger', 'setupMonthlyTrigger', 'sendMonthlySummaryNow', 'recurringIncomeTrigger', 'setupTriggers',
+  'runRecurringIncomeNow'];
 
 rmSync('dist', { recursive: true, force: true });
 mkdirSync('dist');
