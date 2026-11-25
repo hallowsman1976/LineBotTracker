@@ -9,7 +9,7 @@ const NOW = new Date('2026-10-12T05:00:00Z');
 const ME = 'Ume';
 
 function setup(overrides: Partial<ApiDeps> = {}) {
-  const rows: (LedgerEntry & { userId: string; status: string })[] = [
+  const rows: (LedgerEntry & { userId: string; status: string; ref?: string; id?: string; rawText?: string })[] = [
     { entryId: 'e1', userId: ME, status: 'active', type: 'expense', amount: 60, category: 'อาหาร', note: 'ข้าว', date: '2026-10-05' },
     { entryId: 'e2', userId: ME, status: 'active', type: 'income', amount: 800, category: 'รายได้เสริม', note: '', date: '2026-09-30' },
     { entryId: 'e3', userId: 'Uother', status: 'active', type: 'expense', amount: 99, category: 'อาหาร', note: '', date: '2026-10-06' },
@@ -44,9 +44,19 @@ function setup(overrides: Partial<ApiDeps> = {}) {
         row.status = 'cancelled';
         return true;
       },
+      add: (id, entries, meta) => {
+        for (const e of entries) {
+          rows.push({ ...e, id, entryId: `n${rows.length}`, userId: meta.userId, status: 'active', source: meta.source, ref: meta.ref, rawText: meta.rawText });
+        }
+      },
+      hasRef: (userId, ref) => rows.some((r) => r.userId === userId && r.status === 'active' && r.ref === ref),
     },
+    readSlip: () => ({ kind: 'other' }),
     recurring: recurring.store,
-    newId: () => 'r1',
+    newId: (() => {
+      let n = 0;
+      return () => `r${++n}`;
+    })(),
     log: (_l, message) => logs.push(message),
     ...overrides,
   };
@@ -188,5 +198,81 @@ describe('handleApi recurring income', () => {
     });
     expect(call({ action: 'recurringSave', idToken: 'good', id: 'nope', rule })).toEqual({ ok: false, error: 'not_found' });
     expect(call({ action: 'recurringDelete', idToken: 'good', id: 'nope' })).toEqual({ ok: false, error: 'not_found' });
+  });
+});
+
+describe('handleApi slips from the gallery', () => {
+  const slip = {
+    kind: 'transaction' as const,
+    source: 'slip' as const,
+    entry: { type: 'expense' as const, amount: 640, category: 'บิล/สาธารณูปโภค', note: 'การไฟฟ้า', date: '2026-10-10' },
+    ref: 'ABC123',
+    parties: { sender: 'ฉัน', receiver: 'การไฟฟ้า' },
+  };
+
+  it('reads a photo and flags a slip that is already saved', () => {
+    const seen: string[] = [];
+    const { call, rows } = setup({
+      readSlip: (image, userId, today) => {
+        seen.push(`${image}|${userId}|${today}`);
+        return slip;
+      },
+    });
+    expect(call({ action: 'slipRead', idToken: 'good', image: 'aGVsbG8=' })).toEqual({
+      ok: true,
+      data: { status: 'ok', source: 'slip', entry: slip.entry, ref: 'ABC123', parties: slip.parties, duplicate: false },
+    });
+    expect(seen).toEqual([`aGVsbG8=|${ME}|${TODAY}`]);
+
+    rows.push({ entryId: 'old', userId: ME, status: 'active', ref: 'ABC123', ...slip.entry });
+    expect(call({ action: 'slipRead', idToken: 'good', image: 'aGVsbG8=' })).toMatchObject({ ok: true, data: { duplicate: true } });
+  });
+
+  it('passes through photos that are not slips and reports Gemini failures', () => {
+    expect(setup().call({ action: 'slipRead', idToken: 'good', image: 'aGVsbG8=' })).toEqual({ ok: true, data: { status: 'other' } });
+    const { call, logs } = setup({
+      readSlip: () => {
+        throw new Error('Gemini 503');
+      },
+    });
+    expect(call({ action: 'slipRead', idToken: 'good', image: 'aGVsbG8=' })).toMatchObject({ ok: false, error: 'server_error' });
+    expect(logs).toContain('dashboard slip read failed');
+    expect(call({ action: 'slipRead', idToken: 'good', image: 'not base64!' })).toMatchObject({ ok: false, error: 'bad_request' });
+  });
+
+  it('saves reviewed slips with the chosen category, each under its own id, skipping duplicates', () => {
+    const { call, rows } = setup();
+    rows.push({ entryId: 'old', userId: ME, status: 'active', ref: 'OLD1', ...slip.entry });
+    const items = [
+      { entry: { ...slip.entry, category: 'ของใช้' }, source: 'slip', ref: 'NEW1', parties: slip.parties },
+      { entry: { ...slip.entry, type: 'income', category: 'รายได้เสริม' }, source: 'slip', ref: 'NEW2' },
+      { entry: slip.entry, source: 'receipt', ref: 'NEW1' }, // same slip picked twice
+      { entry: slip.entry, source: 'slip', ref: 'OLD1' },
+      { entry: slip.entry, source: 'receipt' }, // no ref: never treated as a duplicate
+    ];
+    expect(call({ action: 'slipSave', idToken: 'good', items })).toEqual({
+      ok: true, data: { saved: 3, duplicates: ['NEW1', 'OLD1'] },
+    });
+    const added = rows.filter((r) => r.entryId.startsWith('n'));
+    expect(added.map((r) => [r.category, r.type, r.ref, r.source])).toEqual([
+      ['ของใช้', 'expense', 'NEW1', 'slip'],
+      ['รายได้เสริม', 'income', 'NEW2', 'slip'],
+      ['บิล/สาธารณูปโภค', 'expense', undefined, 'receipt'],
+    ]);
+    expect(new Set(added.map((r) => r.id)).size).toBe(3);
+    expect(added[0].rawText).toBe('ฉัน → การไฟฟ้า');
+  });
+
+  it('rejects the whole batch when any item is invalid', () => {
+    const { call, rows } = setup();
+    const before = rows.length;
+    const items = [
+      { entry: slip.entry, source: 'slip', ref: 'A1' },
+      { entry: { ...slip.entry, category: 'เงินเดือน' }, source: 'slip', ref: 'A2' },
+    ];
+    expect(call({ action: 'slipSave', idToken: 'good', items })).toEqual({ ok: false, error: 'bad_request', message: 'หมวดไม่ถูกต้อง' });
+    expect(call({ action: 'slipSave', idToken: 'good', items: [{ entry: slip.entry, source: 'text' }] })).toMatchObject({ ok: false, error: 'bad_request' });
+    expect(call({ action: 'slipSave', idToken: 'good', items: [] })).toMatchObject({ ok: false, error: 'bad_request' });
+    expect(rows.length).toBe(before);
   });
 });

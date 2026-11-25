@@ -1,5 +1,13 @@
 // Dashboard API (POST ...exec?api=1). Pure like webhook.ts; side effects come in through ApiDeps.
-import { bangkokDate, validateEntryInput, type Entry, type LedgerEntry } from './parse';
+import {
+  bangkokDate,
+  validateEntryInput,
+  type Entry,
+  type ImageResult,
+  type ImageSource,
+  type LedgerEntry,
+  type SlipParties,
+} from './parse';
 import { saveRule, type RecurringIncome, type RecurringStore } from './recurring';
 import { monthRange } from './summary';
 
@@ -16,7 +24,12 @@ export interface ApiDeps {
     /** Returns false when no active entry with this id belongs to the user. */
     update(userId: string, entryId: string, entry: Entry): boolean;
     remove(userId: string, entryId: string): boolean;
+    add(id: string, entries: Entry[], meta: { userId: string; rawText: string; source: string; ref?: string }): void;
+    /** True when an active entry of this user already carries this slip reference. */
+    hasRef(userId: string, ref: string): boolean;
   };
+  /** Reads one slip/receipt photo (base64 JPEG) for this user; throws when Gemini fails. */
+  readSlip(imageBase64: string, userId: string, today: string): ImageResult;
   recurring: RecurringStore;
   newId(): string;
   log(level: 'INFO' | 'WARN' | 'ERROR', message: string, detail?: string): void;
@@ -37,7 +50,41 @@ export interface RecurringData {
   rules: RecurringIncome[];
 }
 
+/** What the dashboard gets back for one photo picked from the gallery. */
+export type SlipReadData =
+  | {
+      status: 'ok';
+      source: ImageSource;
+      entry: Entry;
+      ref: string;
+      parties: SlipParties;
+      /** An active entry already carries this ref; the dashboard leaves it unticked. */
+      duplicate: boolean;
+    }
+  | { status: 'other' }
+  | { status: 'unreadable' };
+
+export interface SlipSaveData {
+  saved: number;
+  /** Refs skipped because they were already saved (before or earlier in this batch). */
+  duplicates: string[];
+}
+
+/** One reviewed slip sent back for saving. */
+export interface SlipSaveItem {
+  entry: Entry;
+  source: ImageSource;
+  ref?: string;
+  parties?: SlipParties;
+}
+
+// ~6 MB of base64 (about 4.5 MB of JPEG); the dashboard downsizes far below this.
+const MAX_IMAGE_BASE64 = 6_000_000;
+const MAX_SLIPS_PER_SAVE = 30;
+
 interface ApiRequest {
+  image?: unknown;
+  items?: unknown;
   action?: unknown;
   idToken?: unknown;
   month?: unknown;
@@ -80,6 +127,10 @@ export function handleApi(rawBody: string, deps: ApiDeps): ApiResponse {
         return saveRecurring(deps, userId, req.id, req.rule);
       case 'recurringDelete':
         return deleteRecurring(deps, userId, req.id);
+      case 'slipRead':
+        return readSlip(deps, userId, req.image);
+      case 'slipSave':
+        return saveSlips(deps, userId, req.items);
       default:
         return fail('bad_request', 'unknown action');
     }
@@ -121,6 +172,67 @@ function deleteRecurring(deps: ApiDeps, userId: string, id: unknown): ApiRespons
   if (typeof id !== 'string' || !id) return fail('bad_request', 'id required');
   if (!deps.recurring.remove(userId, id)) return fail('not_found');
   return { ok: true, data: { id } };
+}
+
+function readSlip(deps: ApiDeps, userId: string, image: unknown): ApiResponse<SlipReadData> {
+  if (typeof image !== 'string' || !image) return fail('bad_request', 'image required');
+  if (image.length > MAX_IMAGE_BASE64) return fail('bad_request', 'รูปใหญ่เกินไป');
+  if (!/^[A-Za-z0-9+/=]+$/.test(image)) return fail('bad_request', 'image must be base64');
+
+  let result: ImageResult;
+  try {
+    result = deps.readSlip(image, userId, bangkokDate(deps.now()));
+  } catch (err) {
+    deps.log('ERROR', 'dashboard slip read failed', String((err as Error)?.message ?? err));
+    return fail('server_error', 'อ่านรูปไม่สำเร็จ ลองใหม่อีกครั้ง');
+  }
+  if (result.kind !== 'transaction') return { ok: true, data: { status: result.kind } };
+  const duplicate = !!result.ref && deps.ledger.hasRef(userId, result.ref);
+  return {
+    ok: true,
+    data: { status: 'ok', source: result.source, entry: result.entry, ref: result.ref, parties: result.parties, duplicate },
+  };
+}
+
+/**
+ * Saves the slips the user reviewed. Every entry is validated like a hand edit, and each slip
+ * gets its own id so it can be cancelled on its own. Already-saved refs are skipped, not errors.
+ */
+function saveSlips(deps: ApiDeps, userId: string, rawItems: unknown): ApiResponse<SlipSaveData> {
+  if (!Array.isArray(rawItems) || rawItems.length === 0) return fail('bad_request', 'items required');
+  if (rawItems.length > MAX_SLIPS_PER_SAVE) return fail('bad_request', `บันทึกได้ครั้งละไม่เกิน ${MAX_SLIPS_PER_SAVE} รายการ`);
+
+  const today = bangkokDate(deps.now());
+  const items: { entry: Entry; source: ImageSource; ref: string; rawText: string }[] = [];
+  for (const raw of rawItems as Partial<Record<keyof SlipSaveItem, unknown>>[]) {
+    const entry = validateEntryInput(raw?.entry, today);
+    if (typeof entry === 'string') return fail('bad_request', entry);
+    if (raw.source !== 'slip' && raw.source !== 'receipt') return fail('bad_request', 'source must be slip or receipt');
+    const ref = typeof raw.ref === 'string' ? raw.ref.replace(/[^0-9A-Za-z]/g, '').slice(0, 60) : '';
+    const p = (raw.parties ?? {}) as Partial<Record<keyof SlipParties, unknown>>;
+    const name = (v: unknown) => (typeof v === 'string' ? v.trim().slice(0, 100) : '');
+    const rawText = [name(p.sender), name(p.receiver)].filter(Boolean).join(' → ');
+    items.push({ entry, source: raw.source, ref, rawText });
+  }
+
+  const seen = new Set<string>();
+  const duplicates: string[] = [];
+  let saved = 0;
+  for (const item of items) {
+    if (item.ref && (seen.has(item.ref) || deps.ledger.hasRef(userId, item.ref))) {
+      duplicates.push(item.ref);
+      continue;
+    }
+    if (item.ref) seen.add(item.ref);
+    deps.ledger.add(deps.newId(), [item.entry], {
+      userId,
+      rawText: item.rawText,
+      source: item.source,
+      ref: item.ref || undefined,
+    });
+    saved++;
+  }
+  return { ok: true, data: { saved, duplicates } };
 }
 
 function fail(error: ApiError, message?: string): { ok: false; error: ApiError; message?: string } {

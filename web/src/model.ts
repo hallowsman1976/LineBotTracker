@@ -1,5 +1,5 @@
 // Pure view-model helpers for the dashboard (tested in test/web-model.test.ts).
-import { addDays, type LedgerEntry, type TxType } from '../../src/parse';
+import { addDays, type Entry, type LedgerEntry, type TxType } from '../../src/parse';
 
 export interface Totals {
   income: number;
@@ -84,4 +84,36 @@ export function replaceEntry(entries: LedgerEntry[], updated: LedgerEntry): Ledg
 
 export function withoutEntry(entries: LedgerEntry[], entryId: string): LedgerEntry[] {
   return entries.filter((e) => e.entryId !== entryId);
+}
+
+export interface SlipGroup<T> {
+  type: TxType;
+  category: string;
+  items: T[];
+  /** Sum of the ticked items only: what will actually be saved. */
+  total: number;
+  selectedCount: number;
+}
+
+/**
+ * Groups slips read from the gallery by type + category for review: expenses first, then
+ * the biggest groups. Items keep the order they were picked in.
+ */
+export function groupSlips<T extends { entry: Entry; selected: boolean }>(items: T[]): SlipGroup<T>[] {
+  const groups = new Map<string, SlipGroup<T>>();
+  for (const item of items) {
+    const key = `${item.entry.type}:${item.entry.category}`;
+    let g = groups.get(key);
+    if (!g) groups.set(key, (g = { type: item.entry.type, category: item.entry.category, items: [], total: 0, selectedCount: 0 }));
+    g.items.push(item);
+    if (item.selected) {
+      g.total = round2(g.total + item.entry.amount);
+      g.selectedCount++;
+    }
+  }
+  const all = (g: SlipGroup<T>) => g.items.reduce((sum, i) => sum + i.entry.amount, 0);
+  return [...groups.values()].sort(
+    (a, b) =>
+      (a.type === b.type ? 0 : a.type === 'expense' ? -1 : 1) || all(b) - all(a) || a.category.localeCompare(b.category),
+  );
 }

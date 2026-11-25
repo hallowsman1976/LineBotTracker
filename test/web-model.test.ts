@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { formatThaiDate } from '../src/format';
 import type { LedgerEntry } from '../src/parse';
 import {
+  groupSlips,
   categoryBreakdown,
   dayLabel,
   filterEntries,
@@ -65,5 +66,32 @@ describe('dashboard model', () => {
     expect(replaceEntry(list, edited)[0].amount).toBe(75);
     expect(list[0].amount).toBe(60);
     expect(withoutEntry(list, 'a')).toHaveLength(3);
+  });
+});
+
+describe('groupSlips', () => {
+  const slip = (type: 'income' | 'expense', category: string, amount: number, selected = true) => ({
+    entry: { type, category, amount, note: '', date: '2026-10-01' },
+    selected,
+  });
+
+  it('groups by type and category, expenses first, biggest first, totals only ticked slips', () => {
+    const a = slip('expense', 'อาหาร', 60);
+    const b = slip('income', 'รายได้เสริม', 1500);
+    const c = slip('expense', 'บิล/สาธารณูปโภค', 640);
+    const d = slip('expense', 'อาหาร', 120.5, false);
+    const e = slip('income', 'อื่นๆ', 100);
+    const groups = groupSlips([a, b, c, d, e]);
+    expect(groups.map((g) => [g.type, g.category, g.total, g.selectedCount, g.items.length])).toEqual([
+      ['expense', 'บิล/สาธารณูปโภค', 640, 1, 1],
+      ['expense', 'อาหาร', 60, 1, 2],
+      ['income', 'รายได้เสริม', 1500, 1, 1],
+      ['income', 'อื่นๆ', 100, 1, 1],
+    ]);
+    expect(groups[1].items).toEqual([a, d]);
+  });
+
+  it('keeps the same category apart when the type differs', () => {
+    expect(groupSlips([slip('expense', 'อื่นๆ', 10), slip('income', 'อื่นๆ', 20)])).toHaveLength(2);
   });
 });

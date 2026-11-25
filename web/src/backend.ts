@@ -1,6 +1,6 @@
 // Talks to the Apps Script API, or to an in-memory demo backend when no LIFF app is configured.
-import type { ApiError, ApiResponse, MonthData, RecurringData } from '../../src/api';
-import type { Entry, LedgerEntry } from '../../src/parse';
+import type { ApiError, ApiResponse, MonthData, RecurringData, SlipReadData, SlipSaveData, SlipSaveItem } from '../../src/api';
+import type { Entry, LedgerEntry, SlipParties } from '../../src/parse';
 import { settleLastPosted, type RecurringIncome, type RecurringInput } from '../../src/recurring';
 
 export class ApiFailure extends Error {
@@ -21,6 +21,9 @@ export interface Backend {
   /** Creates a rule when id is omitted. */
   saveRecurring(id: string | undefined, rule: RecurringInput): Promise<RecurringIncome>;
   removeRecurring(id: string): Promise<void>;
+  /** Reads one slip/receipt photo (base64 JPEG). */
+  readSlip(imageBase64: string): Promise<SlipReadData>;
+  saveSlips(items: SlipSaveItem[]): Promise<SlipSaveData>;
 }
 
 export class ApiBackend implements Backend {
@@ -53,6 +56,14 @@ export class ApiBackend implements Backend {
     await this.call({ action: 'recurringDelete', id });
   }
 
+  readSlip(image: string) {
+    return this.call<SlipReadData>({ action: 'slipRead', image });
+  }
+
+  saveSlips(items: SlipSaveItem[]) {
+    return this.call<SlipSaveData>({ action: 'slipSave', items });
+  }
+
   private async call<T>(body: Record<string, unknown>): Promise<T> {
     let res: Response;
     try {
@@ -78,6 +89,8 @@ export class DemoBackend implements Backend {
   private entries: LedgerEntry[];
   private rules: RecurringIncome[];
   private ids = 0;
+  private reads = 0;
+  private refs = new Set<string>();
 
   constructor(private readonly today: string) {
     this.entries = demoEntries(today);
@@ -118,7 +131,66 @@ export class DemoBackend implements Backend {
     await delay(250);
     this.rules = this.rules.filter((r) => r.id !== id);
   }
+
+  async readSlip(): Promise<SlipReadData> {
+    await delay(900 + Math.random() * 900);
+    const n = this.reads++;
+    const sample = DEMO_SLIPS[n % DEMO_SLIPS.length];
+    if (!sample) return { status: 'other' };
+    const ref = `DEMO${n % DEMO_SLIPS.length}`;
+    return {
+      status: 'ok',
+      source: sample.source,
+      entry: { ...sample.entry, date: this.today },
+      ref,
+      parties: sample.parties,
+      duplicate: this.refs.has(ref),
+    };
+  }
+
+  async saveSlips(items: SlipSaveItem[]): Promise<SlipSaveData> {
+    await delay(400);
+    const duplicates: string[] = [];
+    let saved = 0;
+    for (const item of items) {
+      if (item.ref && this.refs.has(item.ref)) {
+        duplicates.push(item.ref);
+        continue;
+      }
+      if (item.ref) this.refs.add(item.ref);
+      this.entries.push({ ...item.entry, entryId: `demo-slip${++this.ids}`, source: item.source });
+      saved++;
+    }
+    return { saved, duplicates };
+  }
 }
+
+type DemoSlip = Pick<SlipSaveItem, 'source'> & { parties: SlipParties; entry: Omit<Entry, 'date'> };
+
+/** null = a photo that isn't a slip. */
+const DEMO_SLIPS: (DemoSlip | null)[] = [
+  {
+    source: 'slip',
+    entry: { type: 'expense', amount: 640, category: 'บิล/สาธารณูปโภค', note: 'การไฟฟ้าส่วนภูมิภาค' },
+    parties: { sender: 'นาย สมชาย ใ', receiver: 'การไฟฟ้าส่วนภูมิภาค' },
+  },
+  {
+    source: 'receipt',
+    entry: { type: 'expense', amount: 389, category: 'ของใช้', note: 'Lotus' },
+    parties: { sender: '', receiver: 'Lotus' },
+  },
+  {
+    source: 'slip',
+    entry: { type: 'expense', amount: 120, category: 'อาหาร', note: 'ร้านก๋วยเตี๋ยวเรือ' },
+    parties: { sender: 'นาย สมชาย ใ', receiver: 'ร้านก๋วยเตี๋ยวเรือ' },
+  },
+  null,
+  {
+    source: 'slip',
+    entry: { type: 'income', amount: 1500, category: 'รายได้เสริม', note: 'บริษัท เอบีซี' },
+    parties: { sender: 'บริษัท เอบีซี', receiver: 'นาย สมชาย ใจดี' },
+  },
+];
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
